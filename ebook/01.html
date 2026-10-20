@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>从对话到工具调用 · AI 工程师</title><link rel="stylesheet" href="reader.css">
+<script defer src="reader.js"></script>
+</head>
+<body><a class="skip" href="#main">跳到正文</a><header class="bar"><div class="bar-inner"><a class="brand" href="index.html">← 全书目录</a><div class="reader-tools" role="group" aria-label="阅读设置"><button data-size="-2" aria-label="减小字号">A−</button><span id="font-value" aria-live="polite">20px</span><button data-size="2" aria-label="增大字号">A＋</button><button class="print" data-print>打印 / PDF</button></div></div><div class="progress" aria-hidden="true"></div></header>
+<div class="reader-layout"><aside class="chapter-toc"><span class="part-label">本章导航</span><nav aria-label="本章目录"><a href="#why">谁在执行函数</a><a href="#diagram">调用有两条出口</a><a href="#protocol">读懂 Function Calling 协议</a><a href="#trace">走完一次调用</a><a href="#code">逐段读源码</a><a href="#boundaries">边界与常见误解</a><a href="#practice">动手验证</a><a href="#external">延伸对照</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+<p>第一篇 / 第 01 章<br>建议阅读 18 分钟<br>练习另计</p><p>阅读到的小节会保存在当前浏览器，可从目录页继续。</p></aside>
+<main id="main" class="reading"><article><header class="chapter-head"><span class="edition">第一篇 · 建立 Agent 的基本模型</span><h1>从对话到工具调用</h1><p class="deck">用一条站点库存查询拆开工具调用：模型提交请求，宿主核验参数并读取库存，答案里的数字必须能回到那次读取。</p><p class="meta">第 01 章 · 完整章节 · 先修：Python 函数、JSON、基本的 LLM 对话接口</p></header>
+<details class="mobile-toc"><summary>本章目录 · 10 个小节</summary><nav aria-label="移动版本章目录"><a href="#why">谁在执行函数</a><a href="#diagram">调用有两条出口</a><a href="#protocol">读懂 Function Calling 协议</a><a href="#trace">走完一次调用</a><a href="#code">逐段读源码</a><a href="#boundaries">边界与常见误解</a><a href="#practice">动手验证</a><a href="#external">延伸对照</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+</details>
+
+<section id="why"><h2>谁在执行函数</h2><p>早高峰前，值班员问公共自行车助手：青禾站现在能调出几辆车？对话模型可以生成一个数量，但站点库存会随借还变化，参数里学过的文本无法证明此刻有多少辆可用车。助手需要读取调度系统，而调度系统的访问能力掌握在应用程序手中。</p><p>把职责拆开后，一次查询包含三个不同事件。模型选择 <code>read_station</code> 并给出站点编码；宿主检查编码、身份和查询权限，然后运行函数；模型接收查询结果，组织给值班员看的解释。前一个事件成功，不代表后一个事件已经发生。网络断开时，模型仍可能正常生成调用请求，库存读取却没有完成。</p><p>本章用教学站点 <code>QH-07</code> 建立最小样例。固定快照中有 18 辆在站车，4 辆处于维修锁定，另有 3 辆是不可调走的安全保留量，可调数量为 <code>18 - 4 - 3 = 11</code>。这些数字都是离线设定，不是任何城市的实时运营数据。模型应把这个来源边界告诉值班员，不能把演示结果描述成已查询线上平台。</p><p>从日志判断动作是否发生，要找到执行开始、执行结束及结果编号。自然语言里的“正在查询”只是输出文本。即使调用请求合法，宿主也可以因为租户不匹配而拒绝执行，之后将拒绝原因作为观察交回模型。权限检查因此不能只写在提示词里。</p></section>
+
+<section id="diagram"><h2>调用有两条出口</h2><p>两种出口决定宿主需不需要再次请求模型。把分叉画成消息账本，可以同时检查返回值和调用次数。</p><figure class="book-diagram" aria-label="公共自行车助手的状态与证据对照"><h3>路径 A · 模型没有请求工具</h3><table><thead><tr><th scope="col">输入类型</th><th scope="col">第一次响应</th><th scope="col">宿主状态</th><th scope="col">结束条件</th></tr></thead><tbody><tr><td>解释维修锁定的含义</td><td>普通文本，无工具请求</td><td>执行次数仍为 0</td><td>直接交付解释</td></tr><tr><td>读数失败但模型仍输出数字</td><td>普通文本，无证据</td><td>没有库存快照</td><td>应由业务校验拒绝冒充实时读数</td></tr></tbody></table><p>不需要实时信息的解释可以在一次请求内完成。业务若要求所有库存数字都来自工具，就还要检查回答所引用的证据，不能仅凭没有工具请求而判定可以返回。</p><h3>路径 B · 模型请求了工具</h3><table><thead><tr><th scope="col">时点</th><th scope="col">新增消息</th><th scope="col">可检查的值</th></tr></thead><tbody><tr><td>t0</td><td>user</td><td>QH-07 可调多少辆</td></tr><tr><td>t1</td><td>assistant.tool_calls</td><td>call-qh-1，read_station</td></tr><tr><td>t2</td><td>tool</td><td>18 在站，4 维修，3 保留</td></tr><tr><td>t3</td><td>assistant.content</td><td>可调 11 辆，引用快照编号</td></tr></tbody></table><p>工具路径多一次模型生成，也多一次外部读取。这个两轮版本只适合读取后就能回答的问题；如果下一步还要查运力再决定搬运数量，宿主需要显式的循环和退出预算。</p><figcaption>表中数据均为教学设定，用于追踪输入、状态与可核查结果。</figcaption></figure></section>
+
+<section id="protocol"><h2>读懂 Function Calling 协议</h2><p>这里沿用 OpenAI Chat Completions 风格的字段，目的是理解消息怎样配对。其他供应商的内容块结构可能不同，接入时应按所用接口文档转换，不应直接复制消息字典。</p><table><thead><tr><th scope="col">载体</th><th scope="col">内容</th><th scope="col">必须保持的关系</th></tr></thead><tbody><tr><td>tools</td><td>函数说明和参数约束</td><td>声明的名字要能映射到宿主实现</td></tr><tr><td>tool_calls</td><td>调用编号、函数名、JSON 参数字符串</td><td>每项必须独立校验</td></tr><tr><td>tool 消息</td><td>本地结果的序列化文本</td><td>tool_call_id 对应原调用编号</td></tr><tr><td>assistant 文本</td><td>解释及引用</td><td>数值不超出工具证据</td></tr></tbody></table><div class="code-label"><span>教学接口声明，字段形态参照 Chat Completions；并非仓库现成工具</span><button data-copy="code-schema" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-schema">station_tool = {
+    &quot;type&quot;: &quot;function&quot;,
+    &quot;function&quot;: {
+        &quot;name&quot;: &quot;read_station&quot;,
+        &quot;description&quot;: &quot;读取一个公共自行车站点的库存快照，不修改车辆状态。&quot;,
+        &quot;parameters&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: {
+                &quot;station_id&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;pattern&quot;: &quot;^[A-Z]{2}-[0-9]{2}$&quot;}
+            },
+            &quot;required&quot;: [&quot;station_id&quot;],
+            &quot;additionalProperties&quot;: False
+        }
+    }
+}</code></pre><p><code>arguments</code> 通常是字符串，需要先解析 JSON。<code>parameters</code> 里的类型和必填项帮助模型构造参数，但不能代替宿主的检查。有的服务只支持 JSON Schema 的部分关键字；上面的正则即使没有被服务端强制执行，宿主仍须执行相同的编码规则。</p><p>站点存在与否是业务事实，无法靠字符串格式判断。<code>QH-99</code> 可以符合格式，却不在当前租户的站点集合里。权限、库存版本和读取超时也不属于参数形状。宿主应分别返回可识别的失败状态，让调用方区分应修正输入、重新登录，还是稍后重试。工具描述只说明能力；真正开放了哪些能力，还要看执行注册表。</p></section>
+
+<section id="trace"><h2>走完一次调用</h2><p>以下是人为构造的完整消息轨迹，用来审核协议，不声称模型在线产生了这些输出。初始消息是 system 和 user 两项。system 要求库存数字带快照编号，user 询问 <code>QH-07</code> 的可调数量。第一次响应提出 <code>read_station</code>，参数为 <code>{&quot;station_id&quot;:&quot;QH-07&quot;}</code>，调用编号为 <code>call-qh-1</code>。</p><p>宿主把整条 assistant 请求加入历史，随后从本地固定数据表读到 <code>present=18</code>、<code>repair_locked=4</code>、<code>reserve=3</code>。结果还携带 <code>snapshot_id=&quot;sim-0730&quot;</code> 和 <code>mode=&quot;fixture&quot;</code>。回填之后，消息列表由两项变成四项：指令、问题、调用请求、工具结果。第二次生成可以说明可调 11 辆，并指出这是教学快照。</p><p>如果读取抛出超时，第四项应是失败结果，不能用先前缓存的成功数值偷偷补位。若业务允许缓存，应同时回填数据年龄和缓存标记，让模型能够解释其时效。把成功与失败都表示成结构化结果，有助于测试这两条轨迹是否被混用。</p><h3>为什么用 <code>tool_call_id</code> 而不是靠顺序？</h3><p>假设同一次响应还请求读取邻站 <code>LC-02</code>。两个请求可能并行执行，后请求的结果先完成。按列表位置配对就会把柳川站库存装到青禾站名下。编号将结果绑定到具体调用，追加结果时应原样保留；宿主不应重命名编号或将两个结果合并成一条没有对应关系的消息。</p><p>还要保留发起调用的 assistant 消息。仅存一段“查询库存”的文本，再追加 tool 结果，会丢失函数名、参数和调用编号。接口可能拒绝这样的消息，也会让离线审计无法重建执行过程。<sup><a class="note-ref" id="note-ref-2" href="#note-2" role="doc-noteref" aria-label="脚注 2：消息角色的约束">[2]</a></sup></p></section>
+
+<section id="code"><h2>逐段读源码</h2><p>原仓库从单文件到模块化工程展示了声明、分发和回填三个位置。本节用同样的接口边界重新写一个站点查询版本，代码标注为教学片段，不把它冒充源码逐字摘录。模型适配器负责返回普通字典，业务函数不依赖某个 SDK。</p><h3>第一步：组装消息并第一次调用</h3><p>先只讨论直接返回的出口。<code>reply</code> 是适配器已转好的响应字典。判断工具请求用结构字段，不能在 <code>content</code> 里搜索“调用”两个字。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-start" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-start">def first_turn(question, model_call, tools):
+    messages = [
+        {&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;库存回答须注明快照来源；失败时不要猜数。&quot;},
+        {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: question},
+    ]
+    reply = model_call(messages, tools=tools)
+    messages.append(reply)
+    if not reply.get(&quot;tool_calls&quot;):
+        return {&quot;status&quot;: &quot;text&quot;, &quot;messages&quot;: messages,
+                &quot;answer&quot;: reply.get(&quot;content&quot;) or &quot;&quot;}
+    return {&quot;status&quot;: &quot;needs_tools&quot;, &quot;messages&quot;: messages, &quot;reply&quot;: reply}</code></pre><p>适配层应移除传输专用字段，并保留接口允许回传的 assistant 字段。空文本不是异常：工具请求响应的正文可以为空。若直接文本包含实时数值，业务层仍可要求额外的证据检查。</p><h3>第二步：执行工具</h3><p>执行入口面对模型生成的非可信参数。这里用标准库完成必需检查，示例只读固定数据，不暴露任意 Python 函数。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-tool" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-tool">import json
+import re
+
+def dispatch(name, raw_args):
+    if name != &quot;read_station&quot;:
+        return {&quot;ok&quot;: False, &quot;error&quot;: &quot;unknown_tool&quot;}
+    try:
+        args = json.loads(raw_args)
+    except (TypeError, ValueError):
+        return {&quot;ok&quot;: False, &quot;error&quot;: &quot;bad_json&quot;}
+    if not isinstance(args, dict) or set(args) != {&quot;station_id&quot;}:
+        return {&quot;ok&quot;: False, &quot;error&quot;: &quot;bad_fields&quot;}
+    sid = args[&quot;station_id&quot;]
+    if not isinstance(sid, str) or not re.fullmatch(r&quot;[A-Z]{2}-[0-9]{2}&quot;, sid):
+        return {&quot;ok&quot;: False, &quot;error&quot;: &quot;bad_station_id&quot;}
+    if sid != &quot;QH-07&quot;:
+        return {&quot;ok&quot;: False, &quot;error&quot;: &quot;station_not_in_fixture&quot;}
+    return {&quot;ok&quot;: True, &quot;station_id&quot;: sid, &quot;present&quot;: 18,
+            &quot;repair_locked&quot;: 4, &quot;reserve&quot;: 3,
+            &quot;snapshot_id&quot;: &quot;sim-0730&quot;, &quot;mode&quot;: &quot;fixture&quot;}</code></pre><p>检查顺序先缩小名字，再解析参数，再验证字段集合与值。<code>additionalProperties=False</code> 的约束在这里对应字段集合判断。真实服务还应在查询前绑定认证主体和租户，不能让模型通过参数挑选任意租户。只读示例没有重试写操作带来的重复执行问题。</p><h3>第三步：写回结果并第二次调用</h3><p>工具结果以 JSON 文本写入消息，以便模型看到数值字段和失败码。收尾请求明确禁用继续调用；若选用的供应商不支持同样字段，要在适配层实现等价限制。</p><div class="code-label"><span>片段：依赖前面的 dispatch 和返回普通字典的 model_call 适配器</span><button data-copy="code-end" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-end">def finish_turn(state, model_call, tools):
+    messages = state[&quot;messages&quot;]
+    for request in state[&quot;reply&quot;][&quot;tool_calls&quot;]:
+        fn = request[&quot;function&quot;]
+        result = dispatch(fn[&quot;name&quot;], fn[&quot;arguments&quot;])
+        messages.append({&quot;role&quot;: &quot;tool&quot;, &quot;tool_call_id&quot;: request[&quot;id&quot;],
+                         &quot;content&quot;: json.dumps(result, ensure_ascii=False)})
+    final = model_call(messages, tools=tools, tool_choice=&quot;none&quot;)
+    if final.get(&quot;tool_calls&quot;):
+        raise RuntimeError(&quot;final_turn_requested_tool&quot;)
+    return final.get(&quot;content&quot;) or &quot;&quot;</code></pre><p>一次响应可能携带多个请求，所以上面的 <code>for</code> 不代表只执行一个函数。业务如需“最多一项”，应在任何执行开始前检查列表长度，并对超额请求给出协议允许的失败反馈。第二次生成也必须有超时和空答案处理，否则两轮限制仍可能长时间不结束。</p><h3>拆成模块后有什么变化</h3><p>按职责拆分时，可以让 <code>tools/</code> 保存只读业务函数，注册模块导出声明与处理器，模型适配模块处理 SDK 对象，编排模块处理消息顺序。新增站点工具时先为业务函数写离线断言，再登记接口，最后调整模型何时选择它的说明。</p><p>原仓库的模块化目录适合用来核对这些边界，但本页没有把自行车工具写进该目录。不要照着本页的名字去寻找仓库里不存在的 <code>read_station.py</code>；它是新编的教学实现。目录拆分本身也不会增加安全性，只有实际执行的校验才会拒绝危险输入。</p></section>
+
+<section id="boundaries"><h2>边界与常见误解</h2><p>把协议跑通以后，仍要检查哪些保证来自控制流、哪些只来自语言约定。下面几个边界会直接影响值班员是否能依赖答案。</p><h3>“一次工具调用”是提示词约定，不是硬限制</h3><p>“读一次就回答”可以帮助模型选择动作，却无法限制一次响应里包含两项请求。两轮编排限制的是模型请求次数。工具执行次数、单次执行时长以及总费用需要另设计数和截止时间。</p><p>最终响应如果还含有调用请求，应当报告无法在预算内完成，而不是把空 content 当作有效答案。能否继续要由宿主决定，不能让模型通过输出“还需要一步”自行扩张权限。</p><h3>天气工具返回的是模拟数据</h3><p>原标题对应仓库里采用固定返回值的天气实现。本页用站点库存固定快照承担同样的教学职责：它隔离了网络与认证，使 <code>18 - 4 - 3</code> 的结果可重复核对。<sup><a class="note-ref" id="note-ref-1" href="#note-1" role="doc-noteref" aria-label="脚注 1：演示桩与真实依赖">[1]</a></sup> 这类替身无法测试调度平台是否延迟更新、是否限流，也不能验证站点现场盘点和平台读数一致。</p><p>从固定快照接入真实数据时，返回格式最好增加采集时间、库存版本和来源服务。若调度平台读取失败，就保留失败状态；不能让桩数据在生产配置错误时自动成为兜底库存。</p><h3>参数校验几乎为零</h3><p>合法 JSON 可以是列表、数字或空对象。即便是字典，也可能漏字段、传入布尔值代替数量，或者把别的区域编码混入参数。类型校验之后还要做存在性、访问范围与业务约束检查。</p><p>拒绝信息应当足够让模型修正输入，但不要把内部堆栈、数据库地址或完整凭证返回给模型。对格式错误和权限拒绝采用不同错误码，有助于避免对永久拒绝反复重试。</p><h3>消息历史不是长期记忆</h3><p>四条消息只属于这次查询。函数结束后若没有保存，下一次问“邻站呢”就没有前次站点可供解析。保存消息能支持多轮交互，但库存事实的时效不能随历史永久延长。再次调度前应读取新快照，而不是把昨天的工具结果当作长期有效的记忆。</p><h3>模型输出不能直接当事实</h3><p>验收应检查答案数字是否来自对应快照，以及算术是否正确。若模型写“最多调 14 辆”，工具返回的维修锁定和保留量已经反驳这个数。低温度或引用快照编号都不能自动修正这种计算错误，宿主可直接计算可调数量，把模型的职责收窄为解释。</p></section>
+
+<section id="practice"><h2>动手验证</h2><p>这组练习不发送模型请求。把前面的函数放进同一个 Python 文件，再增加固定响应适配器，就能检查消息序列和执行证据。</p><h3>练习一：用离线回复走完两条路径</h3><p>测试应真正调用被测试的函数，不能只定义一个假回复再打印通过。下面同时覆盖有工具和无工具两条出口。</p><div class="code-label"><span>组合练习：与本页前四段代码放在同一文件中运行</span><button data-copy="code-exercise" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-exercise">seen = []
+def fake_model(messages, **options):
+    seen.append([dict(m) for m in messages])
+    if len(seen) == 1:
+        return {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: None, &quot;tool_calls&quot;: [{
+            &quot;id&quot;: &quot;call-qh-1&quot;, &quot;type&quot;: &quot;function&quot;, &quot;function&quot;: {
+                &quot;name&quot;: &quot;read_station&quot;, &quot;arguments&quot;: &#x27;{&quot;station_id&quot;:&quot;QH-07&quot;}&#x27;}}]}
+    return {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;教学快照 sim-0730：可调 11 辆。&quot;}
+
+state = first_turn(&quot;QH-07 可调多少辆？&quot;, fake_model, [station_tool])
+answer = finish_turn(state, fake_model, [station_tool])
+assert [m[&quot;role&quot;] for m in seen[1]] == [&quot;system&quot;, &quot;user&quot;, &quot;assistant&quot;, &quot;tool&quot;]
+assert seen[1][-1][&quot;tool_call_id&quot;] == &quot;call-qh-1&quot;
+result = json.loads(seen[1][-1][&quot;content&quot;])
+assert result[&quot;present&quot;] - result[&quot;repair_locked&quot;] - result[&quot;reserve&quot;] == 11
+assert &quot;11&quot; in answer
+direct = first_turn(&quot;解释站点编码&quot;, lambda *a, **k: {
+    &quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;编码用于定位站点。&quot;}, [station_tool])
+assert direct[&quot;status&quot;] == &quot;text&quot; and len(direct[&quot;messages&quot;]) == 3</code></pre><p>再将参数改成 <code>[]</code> 或加入 <code>tenant_id</code>，应获得 <code>bad_fields</code>，且没有成功快照。把调用编号换成另一串字符，断言应随之失败，证明测试确实检查了配对关系。</p><h3>练习二：亲手加一个工具</h3><p>可以增加 <code>dispatch_capacity</code>，输入厢式车容量和已装车辆数，输出剩余装载空间。教学输入为容量 12、已装 5，预期剩余 7。工具只做减法并拒绝负数，不接真实车辆系统。先写独立函数与断言，再补声明和注册映射。</p><p>试着只加声明、不加处理器，观察模型请求可以构造出来但宿主拒绝执行；反过来只加处理器、不公开声明，模型通常不知道能力存在。两处都齐全以后，再比较模型是否选对工具。</p><h3>观察日志时，只问这三个问题</h3><p>读日志时分别核对：模型请求的名字和参数是否被接受；结果编号是否绑定到该请求；下一次请求是否真的携带这条结果。三个检查点分别对应接口、执行和反馈，任一点缺失都不宜宣布查询成功。练习日志只记录教学站点，不要把真实骑行人身份或访问凭证放进打印内容。</p></section>
+
+<section id="external"><h2>延伸对照：工具调用在真实生态里的形态</h2><p>工具调用把模型输出接到程序执行入口。研究论文关心模型怎样学习选择工具，API 文档关心消息怎样传输，运行时则必须补足授权和失败处理。三个层次不宜混为一谈。</p><h3>思想源头</h3><p>Toolformer 研究如何让语言模型在生成中学习插入有用的 API 调用，ReAct 研究如何将行动与后续观察组织进连续求解过程。对自行车助手来说，学会选库存查询工具只是能力的一部分；是否允许读取某个区域、是否已经真正获得结果，仍需运行时保证。</p><p>本章结构化请求也不等同于研究里使用的原始文本协议。专门字段减少了字符串解析歧义，但输入校验、超时和证据检查并没有因此消失。</p><h3>协议层：不同厂商，同一分工</h3><p>在 OpenAI 风格协议中，调用常放在 assistant 的 <code>tool_calls</code>；Anthropic 采用 <code>tool_use</code> 和 <code>tool_result</code> 内容块。转换器需要保存调用标识、输入和错误语义，不能只重命名一个字段。多项请求、流式参数增量和中断后的恢复行为，都应单独写适配测试。</p><p>如果只用本地字典测试，能确认你的组装逻辑；要确认某个服务接受这种序列，还需在该服务支持的版本上做集成测试。本页没有执行这样的在线检查。</p><h3>为什么会出现 MCP</h3><p>站点查询可能由城市数据平台提供，维修工单由另一个系统维护。把每种客户端都嵌进一个进程，会让认证、版本和部署相互牵连。MCP 将工具发现与调用放到标准协议边界，宿主可以连接独立服务。</p><p>独立 server 不会替应用完成全部授权。工具目录可能展示某项能力，当前值班员仍未必有执行权限。工具描述和返回文本也应当视为外部数据，不能让它们修改宿主的安全政策。</p><h3>本项目与生产实现的差距</h3><p>链接中的最小工程重点是控制流，缺少完整的参数约束、取消传播、请求去重与审计保留策略。把它改成线上只读查询时，可以先给每次调用加请求编号和截止时间，再补权限拒绝测试。若以后引入“创建搬运任务”，还需要审批与幂等键，不能沿用只读函数的风险假设。</p><p>接口原文可查 <a href="https://platform.openai.com/docs/guides/function-calling">OpenAI Function Calling</a>、<a href="https://docs.anthropic.com/en/docs/build-with-claude/tool-use">Anthropic Tool Use</a>；协议边界见 <a href="https://modelcontextprotocol.io/">MCP</a>，研究方法见 <a href="https://arxiv.org/abs/2302.04761">Toolformer</a>。</p></section>
+
+<section id="recap"><h2>回顾与自测</h2><p>一次库存回答的最小证据链是调用请求、校验结果、库存快照和最终表达。返回文本只是链末端的产物，缺少中间记录就无法追查错误数字来自哪里。</p><details><summary>站点查询返回超时，能否继续回答 11 辆？</summary><div><p>不能把教学快照的 11 辆冒充此次读取结果。允许陈述缓存时，也必须注明缓存来源和时间，否则应说明目前无法确认。</p></div></details><details><summary>声明了工具，为什么仍然报 unknown_tool？</summary><div><p>工具声明供模型选择，执行映射供宿主分发。两个表可能不同步。测试应比较公开名字和可执行名字，并检查当前权限是否允许访问。</p></div></details><details><summary>第二次模型仍要求查询运力，怎样处理？</summary><div><p>两轮版本应明确返回预算内未完成。需要多步决策时再改为有上限的循环，不要在收尾函数里隐式递归。</p></div></details><p><a class="button" href="react.html">继续阅读：带观察反馈的 ReAct 循环</a></p></section>
+
+<section id="sources"><h2>源码与编写说明</h2><p>本章保留仓库快照 d9e02cb 的源码入口，便于对照协议位置。站点数据、调用轨迹和代码均为本页新编；代码中 model_call 是注入的适配器，不是已有 SDK API。本次没有调用远程模型。</p><ul class="source-list"><li><a href="../01-Agent/00-llm_function_call.py">01-Agent/00-llm_function_call.py</a>。定位工具声明、请求装配和日志记录三个位置。</li><li><a href="../01-Agent/00-llm_function_call/llm_function_call.py">01-Agent/00-llm_function_call/llm_function_call.py</a>。可比较单工具版本如何缩短协议链路。</li><li><a href="../01-Agent/01-small-llm-function-call-project/README.md">01-Agent/01-small-llm-function-call-project/README.md</a>。查看职责拆分与工具扩展的目录边界。</li><li><a href="../01-Agent/01-small-llm-function-call-project/agent/agent.py">agent/agent.py</a>、<a href="../01-Agent/01-small-llm-function-call-project/agent/prompt.py">agent/prompt.py</a>。分别检查控制流与行为指令，不把指令误读为强制检查。</li><li><a href="../01-Agent/01-small-llm-function-call-project/tools/basic_calculator.py">tools/basic_calculator.py</a>、<a href="../01-Agent/01-small-llm-function-call-project/tools/reverse_string.py">tools/reverse_string.py</a>。这两个真实文件展示独立函数如何连接声明；本页自行车案例没有改动它们。</li></ul><p>本页可以离线阅读与复制代码。打开源码链接时，需要让 ebook 与原仓库保持相对位置；在线资料和模型下载另需网络。</p></section>
+
+<section id="notes" class="footnotes" role="doc-endnotes"><h2>补充脚注</h2><p>这两条注释补足正文的操作边界。它们描述设计要求，不代表链接的演示程序已经具备相应保障。</p><ol><li id="note-1"><p>固定返回值适合测试协议：同一输入得到同一快照，失败可由测试主动注入。它不能覆盖网络超时、权限撤销或库存延迟。接入真实平台以后，须为这些情况另外建立测试证据。 <a class="note-back" href="#note-ref-1" role="doc-backlink" aria-label="返回正文脚注 1">↩ 返回正文</a></p></li><li id="note-2"><p>消息合法性以所用服务的协议为准。通常需要先出现携带调用编号的请求，再出现对应结果；并行完成可以改变返回次序，却不能丢失配对关系。保存适配前后的消息有助于定位转换错误，但应去除敏感字段。 <a class="note-back" href="#note-ref-2" role="doc-backlink" aria-label="返回正文脚注 2">↩ 返回正文</a></p></li></ol></section>
+</article><nav class="chapter-pager" aria-label="章节翻页"><a href="index.html">← 返回全书目录</a><a href="react.html">下一章 · ReAct：让模型真正调用工具</a></nav>
+<footer class="book-footer"><span>AI 工程师：从原理到实践</span><span>第 01 章 · 完整章节</span></footer></main></div>
+<p id="notice" class="sr-only" role="status"></p></body></html>

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>规划、反思与搜索 · AI 工程师</title><link rel="stylesheet" href="reader.css">
+<script defer src="reader.js"></script>
+</head>
+<body><a class="skip" href="#main">跳到正文</a><header class="bar"><div class="bar-inner"><a class="brand" href="index.html">← 全书目录</a><div class="reader-tools" role="group" aria-label="阅读设置"><button data-size="-2" aria-label="减小字号">A−</button><span id="font-value" aria-live="polite">20px</span><button data-size="2" aria-label="增大字号">A＋</button><button class="print" data-print>打印 / PDF</button></div></div><div class="progress" aria-hidden="true"></div></header>
+<div class="reader-layout"><aside class="chapter-toc"><span class="part-label">本章导航</span><nav aria-label="本章目录"><a href="#why">为什么 ReAct 还不够</a><a href="#diagram">三种控制结构</a><a href="#plan">Plan-and-Execute</a><a href="#reflexion">Reflexion</a><a href="#lats">LATS：把决策看成树</a><a href="#compare">什么时候用哪个</a><a href="#practice">动手验证</a><a href="#external">延伸对照</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+<p>第一篇 / 第 03 章<br>建议阅读 28 分钟<br>练习另计</p><p>本章同时讲三个项目，建议按 Plan → Reflexion → LATS 顺序阅读。</p></aside>
+<main id="main" class="reading"><article><header class="chapter-head"><span class="edition">第一篇 · 建立 Agent 的基本模型</span><h1>规划、反思与搜索</h1><p class="deck">为三个站点安排一辆运输车，需要管理依赖、纠正不合格建议，也可能比较多条路线。规划、反思和树搜索分别把这些决策显式保存下来。</p><p class="meta">第 03 章 · 完整章节 · 先修：第 02 章 ReAct</p></header>
+<details class="mobile-toc"><summary>本章目录 · 10 个小节</summary><nav aria-label="移动版本章目录"><a href="#why">为什么 ReAct 还不够</a><a href="#diagram">三种控制结构</a><a href="#plan">Plan-and-Execute</a><a href="#reflexion">Reflexion</a><a href="#lats">LATS：把决策看成树</a><a href="#compare">什么时候用哪个</a><a href="#practice">动手验证</a><a href="#external">延伸对照</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+</details>
+
+<section id="why"><h2>为什么 ReAct 还不够</h2><p>一辆运输车在 08:00 前要给青禾站和北桥站补车，还要把一辆故障车带回维修点。只逐步询问“接着做什么”，可能在到达青禾站后才发现没有给故障车留车位。每次动作局部合理，整项任务仍会错过时限。</p><p>显式规划把依赖放到执行之前：读取需求、确认来源站保留量、读取车辆容量、计算路线、验证可行性。规划无法预知所有变化，但至少能让缺失的前提暴露出来。发生临时封路时，旧路线需要失效，不能继续按步骤编号向前走。</p><p>另外两类问题需要不同结构。若生成的方案反复漏掉维修车占位，应该把验证反馈转成下一次尝试的策略；若两条路线都满足约束却耗时不同，应该保存候选和比较依据。Reflexion 管跨尝试的修正，LATS 管候选搜索，它们不自动修复错误的数据或不可信评委。</p><p>本章沿用仓库的三个项目作为阅读入口，所有自行车任务、数值和候选树均为新编教学设定。增加控制结构会增加状态和调用成本，只有对应失败确实存在时，才值得引入。</p></section>
+
+<section id="diagram"><h2>三种控制结构</h2><p>把四种结构画成同一任务的状态账，可以看清它们额外保存了什么。</p><figure class="book-diagram" aria-label="公共自行车助手的状态与证据对照"><h3>ReAct · 单链</h3><table><thead><tr><th scope="col">当前证据</th><th scope="col">动作</th><th scope="col">保留状态</th></tr></thead><tbody><tr><td>青禾缺 6 辆</td><td>读取来源站库存</td><td>当前行动与观察</td></tr><tr><td>来源站可调 8 辆</td><td>读取运输车容量</td><td>追加一条轨迹</td></tr></tbody></table><p>单链运行最少需要保存原任务和此前反馈。若某步走错，通常依赖后续观察主动纠正。</p><h3>Plan-and-Execute · 先列清单</h3><table><thead><tr><th scope="col">计划项</th><th scope="col">前提</th><th scope="col">执行结果</th></tr></thead><tbody><tr><td>核对车辆空间</td><td>已获取故障车占位需求</td><td>可供补车的空间为 7</td></tr><tr><td>选择路线</td><td>库存和空间均有效</td><td>路线版本 route-2</td></tr></tbody></table><p>计划将未执行项也存入状态。执行器应能区分未开始、成功、失效和失败，而非只存一段完成文本。</p><h3>Reflexion · 失败后写策略</h3><table><thead><tr><th scope="col">尝试</th><th scope="col">验证反馈</th><th scope="col">写入下一次的规则</th></tr></thead><tbody><tr><td>1</td><td>车位计算漏掉故障车</td><td>先扣除回收占位，再计算配送容量</td></tr><tr><td>2</td><td>容量约束满足</td><td>终止重试，保留验证记录</td></tr></tbody></table><p>反思不能只写“下次更认真”。它需要指出哪项决策规则将改变。</p><h3>LATS · 一棵树</h3><table><thead><tr><th scope="col">候选节点</th><th scope="col">估计代价</th><th scope="col">可回溯证据</th></tr></thead><tbody><tr><td>先青禾后北桥</td><td>教学估时 26 分钟</td><td>路段时间和装卸耗时</td></tr><tr><td>先北桥后青禾</td><td>教学估时 31 分钟</td><td>相同口径下的另一组路段</td></tr></tbody></table><p>树保存多条尚未完全执行的路径。对于真实搬运，搜索应先在模拟器里展开，再选择并批准一条路线执行。</p><figcaption>表中数据均为教学设定，用于追踪输入、状态与可核查结果。</figcaption></figure></section>
+
+<section id="plan"><h2>Plan-and-Execute</h2><p>Plan-and-Execute 的适用前提是任务可以分解为有可检查输出的步骤。仓库版本使用文本清单，再用 ReAct 执行单步；下面把新教学计划写成带依赖的记录，便于理解线性清单的边界。</p><h3>第一步：生成计划</h3><p>一份计划至少应说明每步交付什么。只有“分析、处理、总结”的列表无法判断某一步是否完成。以下记录不用真实规划 API，展示如何验证计划图中的依赖。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-plan" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-plan">plan = [
+    {&quot;id&quot;: &quot;stock&quot;, &quot;needs&quot;: [], &quot;output&quot;: &quot;两站缺口与来源站可调量&quot;},
+    {&quot;id&quot;: &quot;space&quot;, &quot;needs&quot;: [], &quot;output&quot;: &quot;扣除故障车后的配送空间&quot;},
+    {&quot;id&quot;: &quot;route&quot;, &quot;needs&quot;: [&quot;stock&quot;, &quot;space&quot;], &quot;output&quot;: &quot;含时限的路线候选&quot;},
+    {&quot;id&quot;: &quot;check&quot;, &quot;needs&quot;: [&quot;route&quot;], &quot;output&quot;: &quot;约束校验记录&quot;},
+]
+known = set()
+for item in plan:
+    assert set(item[&quot;needs&quot;]) &lt;= known, &quot;依赖不存在或未在前面定义&quot;
+    known.add(item[&quot;id&quot;])</code></pre><p>仓库 <code>_parse_steps</code> 按行清理文本，不会检查依赖存在、空计划或计划里混入说明段落。接入模型规划时，应在执行前验证这些条件，不能让执行器把每个非空行都当成可执行任务。</p><h3>第二步：逐步执行，结果写入 state</h3><p>执行结果不仅是内容，还应包含计划版本和状态。旧计划里 <code>step_1</code> 表示车位，新计划里它可能改成库存，单靠数字键会让历史结果被误用。</p><div class="code-label"><span>教学片段：execute 是注入的单步执行器，结果使用 ok/value/error 契约</span><button data-copy="code-pae" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-pae">def execute_plan(items, execute, version):
+    state = {}
+    for item in items:
+        inputs = {key: state[key][&quot;value&quot;] for key in item[&quot;needs&quot;]}
+        result = execute(item, inputs)
+        if not result[&quot;ok&quot;]:
+            return {&quot;status&quot;: &quot;replan&quot;, &quot;failed&quot;: item[&quot;id&quot;],
+                    &quot;reason&quot;: result[&quot;error&quot;], &quot;state&quot;: state, &quot;version&quot;: version}
+        state[item[&quot;id&quot;]] = {&quot;value&quot;: result[&quot;value&quot;], &quot;version&quot;: version}
+    return {&quot;status&quot;: &quot;verified_steps&quot;, &quot;state&quot;: state, &quot;version&quot;: version}</code></pre><p>重规划时可以复用仍有效的库存快照，但必须按明确规则判断。路线变更并不一定使库存失效，经过较长时间则可能使其过期。仓库 state 在重规划循环之外创建，需要特别检查旧键是否残留和步骤编号是否覆盖。不要把字典这一数据结构本身当成一致性保障。</p><h3>第三步：单步用 ReAct</h3><p>执行器应只看到当前步骤需要的字段，而不是整本状态账。这样既减少提示长度，也让依赖漏传更容易定位。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-exec" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-exec">def step_request(item, dependency_values):
+    return {
+        &quot;goal&quot;: item[&quot;output&quot;],
+        &quot;inputs&quot;: dependency_values,
+        &quot;constraints&quot;: [&quot;只生成建议，不创建工单&quot;, &quot;缺数据时返回失败码&quot;],
+        &quot;plan_step&quot;: item[&quot;id&quot;],
+    }
+request = step_request(plan[2], {&quot;stock&quot;: {&quot;QH-07&quot;: 6}, &quot;space&quot;: 7})
+assert set(request[&quot;inputs&quot;]) == {&quot;stock&quot;, &quot;space&quot;}</code></pre><p>单步内部仍可运行 ReAct：为生成路线去查交通信息，再把结果交回。若每步都带全部中间文本，输入会逐步膨胀。<sup><a class="note-ref" id="note-ref-1" href="#note-1" role="doc-noteref" aria-label="脚注 1：上下文预算">[1]</a></sup> 结构化依赖让“下一步需要什么”在代码里可检查，也能避免无关工具结果干扰当前判断。</p><h3>一次真实运行</h3><p>这个标题保留原章节结构，但本页不把新案例写成实测。复查原仓库真实日志时，应看每项输出是否有工具证据、汇总是否忠实；下面则是一条可手算的模拟验收轨迹。</p><p>设青禾缺 6 辆，北桥缺 3 辆，来源站可调 10 辆，运输车总空间 8 辆，故障车回收占 1 位。计划读取完成后，可配送空间是 7，不能一次满足总缺口 9。执行器应输出部分配送或两趟方案，而不是把 9 写进摘要。</p><p>若业务规定青禾优先，本趟给青禾 6 辆、北桥 1 辆；北桥剩余缺口 2 单独登记。验证器检查配送总数 7 不超过空间 7，且不超过来源站可调 10。汇总阶段应保留“北桥未补满”，不能把所有步骤返回成功误写成全部需求满足。</p></section>
+
+<section id="reflexion"><h2>Reflexion</h2><p>Reflexion 适合能评价一次尝试的任务。这里的尝试是完整配送建议，反馈是容量、保留量、截止时间等约束，不需要等待真实车辆出发后才发现超载。</p><h3>主循环</h3><p>每次尝试都带着此前的改进建议，但是否成功由独立检查结果决定。循环退出时必须暴露最后一次是否通过，不能把失败方案作为普通成功返回。</p><div class="code-label"><span>教学片段：propose、verify、reflect 是三个分离的可注入接口</span><button data-copy="code-refl" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-refl">def improve(task, propose, verify, reflect, max_trials=3):
+    lessons, attempts = [], []
+    for trial in range(1, max_trials + 1):
+        proposal = propose(task, lessons)
+        check = verify(proposal)
+        attempts.append({&quot;trial&quot;: trial, &quot;proposal&quot;: proposal, &quot;check&quot;: check})
+        if check[&quot;ok&quot;]:
+            return {&quot;status&quot;: &quot;passed&quot;, &quot;proposal&quot;: proposal, &quot;attempts&quot;: attempts}
+        lessons.append(reflect(proposal, check))
+        lessons = lessons[-3:]
+    return {&quot;status&quot;: &quot;not_passed&quot;, &quot;attempts&quot;: attempts}</code></pre><p>策略记忆在这次 improve 调用中跨尝试存在，不会自动跨进程保存。若要留到别的调度任务，应附上适用条件和来源，防止将一次性的封路条件记成永久路线规则。</p><h3>评估器：规则优先，模型兜底</h3><p>对容量这样的确定约束，直接检查数值比让评委判断“方案是否合理”更可靠。检查文本里出现某个数字只证明有这个字符串，不证明动作发生，也不证明数字之间的关系成立。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-eval" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-eval">def verify_load(proposal):
+    sent = proposal[&quot;to_qh&quot;] + proposal[&quot;to_bq&quot;]
+    limit = proposal[&quot;van_slots&quot;] - proposal[&quot;repair_pickups&quot;]
+    failures = []
+    if min(proposal[&quot;to_qh&quot;], proposal[&quot;to_bq&quot;]) &lt; 0:
+        failures.append(&quot;negative_delivery&quot;)
+    if sent &gt; limit:
+        failures.append(&quot;capacity_exceeded&quot;)
+    if sent &gt; proposal[&quot;source_movable&quot;]:
+        failures.append(&quot;reserve_violated&quot;)
+    return {&quot;ok&quot;: not failures, &quot;failures&quot;: failures,
+            &quot;delivered&quot;: sent, &quot;delivery_limit&quot;: limit}</code></pre><p>这个片段假设输入已通过类型校验，仅说明业务规则。完整校验还应检查每个站点缺口、字段完整性和数据时间。开放式的可读性可交给模型评价，但硬约束失败不能被文字评价的高分抵消。<sup><a class="note-ref" id="note-ref-2" href="#note-2" role="doc-noteref" aria-label="脚注 2：评估器偏差">[2]</a></sup></p><h3>反思的裁剪</h3><p>反思应短到能进入下一次上下文，又应保留导致失败的条件。重复失败常意味着工具数据或验证规则有问题，不宜让反思无限堆积。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-trim" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-trim">def compact_lessons(items, limit=3):
+    selected, seen = [], set()
+    for item in reversed(items):
+        key = (item[&quot;rule&quot;], item[&quot;scope&quot;])
+        if key in seen:
+            continue
+        selected.append(item)
+        seen.add(key)
+        if len(selected) == limit:
+            break
+    return list(reversed(selected))</code></pre><p>按规则与适用范围去重，比按前几个字符去重更贴近含义。不过结构字段也可能由模型写错，仍需保存原反馈供审计。截断时不要把否定词或数值条件裁掉，否则“不能超过 7”可能变成没有上限的建议。</p><h3>一次真实运行</h3><p>新案例仍是模拟。第一次建议给青禾 6、北桥 3，运输车 8 位且回收 1 辆。验证得到配送 9、上限 7，失败码是 capacity_exceeded。反思记录可以写为：有回收占位时，先计算配送上限，再分配站点需求。</p><p>第二次建议为青禾 6、北桥 1，并单列北桥剩余 2。容量检查通过，但若评估任务要求“两站都补满且只跑一趟”，它仍不算成功，应该报告约束不可同时满足。反思无法把不可行问题变可行，也不应诱导模型为了通过评估而隐去未完成项。</p><p>失败后的开销包括重新生成建议，必要时还包括模型评估和反思生成；确定规则分支则不需要评委调用。是否划算应看失败类别减少了多少，而非只看第二次文字更完整。</p></section>
+
+<section id="lats"><h2>LATS：把决策看成树</h2><p>LATS 把下一步决策放进搜索树，节点保存路径状态、访问次数和累计价值。调度场景可以比较先去哪个站、是否分两趟等方案。展开节点时应操作模拟状态，不能为了探索候选就向真实平台发多张搬运工单。</p><h3>UCB：在探索与利用之间取舍</h3><p>选择分数将平均收益与探索奖励相加。一个常见写法为 <code>Q/N + C*sqrt(log(N_parent+1)/N)</code>，未访问节点另作优先处理。平均收益代表已有证据，探索项让样本少的分支还有机会。</p><p>假设两个节点都已访问 2 次，累计价值分别为 1.6 和 1.0，它们探索项相同，前者因平均值 0.8 高于 0.5 而胜出。若前者被访问 20 次，后者仍只有 2 次，探索项可能让后者再次被检查。这个公式不证明哪条路线最优，它只控制有限预算怎样分配。</p><h3>扩展：一次生成多个候选</h3><p>候选可以由模型提出，但必须验证是否适用于当前状态。生成失败时不应塞进与任务无关的固定动作。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-expand" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-expand">def expand_routes(state):
+    if state[&quot;remaining_minutes&quot;] &lt;= 0:
+        return []
+    choices = []
+    for next_stop in state[&quot;unvisited&quot;]:
+        if next_stop not in state[&quot;blocked&quot;]:
+            choices.append({&quot;next_stop&quot;: next_stop,
+                            &quot;snapshot_version&quot;: state[&quot;snapshot_version&quot;]})
+    return choices</code></pre><p>仓库示例有为原题定制的兜底候选。迁移到调度任务时，必须删除这类题目特有的假设；空候选应成为可解释的停止状态，不能让系统用不相关动作制造“仍在推进”的假象。</p><h3>打分：启发式与 LLM 结合</h3><p>启发式可按超载、迟到直接淘汰，再按时间和未满足需求估算收益。LLM 可以评价说明是否清楚，却不应凭措辞盖过超载事实。将硬约束与软评分分开，能防止搜索反复奖励写得漂亮但不可执行的路径。</p><p>还要区分预测价值与终局验证。某候选估时较短，可能只因为漏算装卸；树搜索会放大这个评分漏洞。采样人工核对和对模拟器的单元测试，都是搜索质量的一部分。</p><h3>一次运行的树</h3><p>下面记录一次人为设定的搜索过程，数值不是交通实测，也不是仓库原树。每条边先在模拟器中改变地点、载量和剩余时间。</p><div class="code-label"><span>教学搜索账：访问统计为人为设置，只演示比较口径</span><button data-copy="code-tree" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-tree">根：剩余 35 分钟，配送空间 7
+  A：先青禾，再北桥
+     预测 26 分钟，配送 7，未满足 2
+     visits=4，total_value=3.0，平均值=0.75
+  B：先北桥，再青禾
+     预测 31 分钟，配送 7，未满足 2
+     visits=2，total_value=1.0，平均值=0.50
+  C：一次配送 9
+     容量上限 7，硬约束失败，不再展开</code></pre><p>若目标优先最短耗时，A 胜出；若北桥有更早时限，B 可能更优，评分函数就要改变。回传将一次叶子评分累加到其祖先的 visits 和 total_value，不能用一次高分覆盖所有历史。最终选访问最多或价值最高也要事先规定，并在执行前重新确认库存版本没有失效。</p></section>
+
+<section id="compare"><h2>什么时候用哪个</h2><p>采用哪种结构，应对应可复现的失败现象。顺序错误适合先补依赖；同类可修正错误反复出现适合引入反馈记忆；多个可评分候选才需要搜索。</p><table><thead><tr><th scope="col">观察到的失败</th><th scope="col">先尝试的结构</th><th scope="col">必须补的判断</th></tr></thead><tbody><tr><td>忘记读取车位就分配车辆</td><td>Plan-and-Execute</td><td>前提是否齐备、旧状态是否有效</td></tr><tr><td>反复漏扣回收占位</td><td>Reflexion</td><td>反馈是否具体、问题是否可行</td></tr><tr><td>两条路线都可行但不知道选哪条</td><td>LATS</td><td>模拟成本和评价口径是否可信</td></tr><tr><td>两步读取即可作答</td><td>ReAct</td><td>保持轻量预算与必要校验</td></tr></tbody></table><p>这些结构可以组合，但组合后的总成本要计算所有规划、评估和重试。树宽为 3、深为 4 的完整树最多有 <code>1+3+9+27+81=121</code> 个节点，若每个节点都做模型评分，成本远高于只跑一条四步链。有限预算和剪枝应在设计时确定。</p><p>Beam Search 通常按固定宽度保留同一层候选，UCB 搜索则根据访问统计分配后续探索。两者都依赖评分，但保留与再访问策略不同，不能只因为都画成树就认为等价。</p></section>
+
+<section id="practice"><h2>动手验证</h2><p>练习围绕状态污染、评估边界和搜索预算展开。全部可以用固定函数完成，不需要调用模型。</p><h3>练习一：验证 Plan-and-Execute 的重规划分支</h3><p>用三步计划模拟 stock 成功、space 失败、route 未执行。第一次失败时记录 state 中只有 stock。第二版计划交换步骤顺序，检查是否仍按稳定 ID 引用库存，而不是误用旧 step_0。</p><p>可以让执行器在 space 首次调用时返回 <code>{&quot;ok&quot;:False,&quot;error&quot;:&quot;timeout&quot;}</code>，再次调用返回空间 7。预期重规划后只有通过时效检查的 stock 可以复用。再把库存版本改成过期，断言其必须重读。这个练习检验的是重规划的状态契约，而非文本计划写得是否像样。</p><h3>练习二：只改评估器，观察 Reflexion 行为</h3><p>构造容量 8、回收 1、来源可调 10 的输入。建议 6+3 应失败，6+1 应通过容量检查。随后增加“两站必须补满”规则，6+1 也应失败。记录成功定义改变前后，反思是否错误地鼓励隐藏剩余需求。</p><p>评估器测试至少有一个应通过、一个应失败、一个边界值恰好等于上限的方案。只观察某次重试少了一轮，无法证明评价正确。</p><h3>练习三：比较 one_step 与 mcts</h3><p>把上面的 A、B、C 候选交给一个确定的计分函数，分别限制只评一次和最多评六次。记录每次选择的节点、评分调用数以及最终路线。然后故意漏掉装卸耗时，观察搜索是否更自信地选择低估路线。</p><p>预期结果不是 MCTS 一定优于贪心，而是能够解释预算花在了哪条分支上。若两者选出相同方案且质量相同，优先保留成本更小的实现。</p></section>
+
+<section id="external"><h2>延伸对照：这些控制结构从哪来</h2><p>研究方法与仓库教学实现的目标不同。论文会定义训练、环境和评价，简化脚本往往只展示其中一个循环，阅读时要确认省略了哪些条件。</p><h3>规划</h3><p>Plan-and-Solve 将计划放到求解之前，LLMCompiler 进一步表示依赖图并调度独立任务。对自行车任务，库存读取和车辆容量读取可能并行，路线生成必须等二者完成。线性清单容易理解，却会把可并行的读取串行化。</p><p>CodeAct 讨论以代码表达行动，方便组合与执行。采用代码表达并不意味着允许模型执行任意程序，仍须把代码放进受限运行环境，并验证其输入和副作用。</p><h3>反思</h3><p>Self-Refine 通过反馈迭代改进输出，Reflexion 将失败经验写成语言策略，带到新的尝试中。二者不必使用不同模型才算成立，但模型共享盲点时，外部规则和测试尤其重要。对配送数量，算术与容量测试比相互称赞更有判别力。</p><h3>搜索</h3><p>Tree of Thoughts 研究对中间推理状态的探索，LATS 把语言决策、环境行动与树搜索结合起来。把一份行动文本放到节点上只是起点，完整方法还需要环境转移、回报和搜索策略。若候选从未实际或模拟执行，就不能把语言评分称为已经验证的路线收益。</p><h3>业界怎么归类</h3><p>Building Effective Agents 将编排者与工作者、评价者与优化者作为常见模式。可以用这些名称定位工程职责，但不要仅凭名称推断某库已经提供回滚或独立验证。</p><p>相关原文：<a href="https://arxiv.org/abs/2305.04091">Plan-and-Solve</a>、<a href="https://arxiv.org/abs/2312.04511">LLMCompiler</a>、<a href="https://arxiv.org/abs/2303.11366">Reflexion</a>、<a href="https://arxiv.org/abs/2303.17651">Self-Refine</a>、<a href="https://arxiv.org/abs/2305.10601">Tree of Thoughts</a>、<a href="https://arxiv.org/abs/2310.04406">LATS</a> 与 <a href="https://www.anthropic.com/engineering/building-effective-agents">工程模式说明</a>。</p></section>
+
+<section id="recap"><h2>回顾与自测</h2><p>本章新增的状态各有用途：计划保存尚待完成的依赖，反思保存跨尝试的纠正规则，树保存多个候选及其访问证据。它们都需要可信的成功判据。</p><details><summary>state 用字典就能避免重规划污染吗？</summary><div><p>不能。数字键仍可能在不同计划里表示不同含义。需要稳定步骤 ID、计划版本和结果时效；复用应是显式决策。</p></div></details><details><summary>反思能解决总需求超过运力吗？</summary><div><p>不能。它可以让方案正确报告缺口并改为分批配送，无法凭语言创造容量。任务不可行时应停止重试或请求调整约束。</p></div></details><details><summary>搜索次数越多越可靠吗？</summary><div><p>只有评价和模拟有意义时，增加搜索才可能有效。评分漏算装卸时，更多搜索会重复放大相同偏差。</p></div></details><p><a class="button" href="04.html">继续阅读：把维护文档接进 RAG</a></p></section>
+
+<section id="sources"><h2>源码与编写说明</h2><p>这里保留 d9e02cb 的项目与日志链接，供核对原控制流。新案例不复现原任务，不把人为轨迹标作实测，所有代码均为另写的教学片段。</p><ul class="source-list"><li><a href="../01-Agent/02-Plan-and-Execute/Readme.md">02-Plan-and-Execute/Readme.md</a>、<a href="../01-Agent/02-Plan-and-Execute/agent/planner.py">planner.py</a>、<a href="../01-Agent/02-Plan-and-Execute/agent/executor.py">executor.py</a>。定位计划生成、单步执行与重规划的状态范围。</li><li><a href="../01-Agent/02-Plan-and-Execute/log.txt">02-Plan-and-Execute/log.txt</a>。这是仓库已有的历史记录，不能用来证明本页新调度案例运行过。</li><li><a href="../01-Agent/03-Reﬂexion/Readme.md">03-Reﬂexion/Readme.md</a>、<a href="../01-Agent/03-Reﬂexion/agent/reflection_loop.py">reflection_loop.py</a>、<a href="../01-Agent/03-Reﬂexion/agent/evaluator.py">evaluator.py</a>、<a href="../01-Agent/03-Reﬂexion/agent/reflector.py">reflector.py</a>。对照行动、评价和反思各自在何处消耗预算。</li><li><a href="../01-Agent/04-LATS/Readme.md">04-LATS/Readme.md</a>、<a href="../01-Agent/04-LATS/agent/mcts.py">mcts.py</a>、<a href="../01-Agent/04-LATS/agent/expand.py">expand.py</a>、<a href="../01-Agent/04-LATS/agent/scorer.py">scorer.py</a>。可核对选择、扩展、回传和评分之间的数据关系。</li></ul><p>本页可以离线阅读与复制代码。打开源码链接时，需要让 ebook 与原仓库保持相对位置；在线资料和模型下载另需网络。</p></section>
+
+<section id="notes" class="footnotes" role="doc-endnotes"><h2>补充脚注</h2><p>这两条注释补足正文的操作边界。它们描述设计要求，不代表链接的演示程序已经具备相应保障。</p><ol><li id="note-1"><p>状态越多不等于模型掌握得越好。给路线步骤只传当前库存、容量和交通证据，保留原始数据的索引供追查。摘要中缺掉单位或失效条件，会让后续步骤使用一个看似合法却语义不明的数字。 <a class="note-back" href="#note-ref-1" role="doc-backlink" aria-label="返回正文脚注 1">↩ 返回正文</a></p></li><li id="note-2"><p>评委的错误会进入反思或搜索回报，继而影响后续尝试。将超载、超时限等硬约束交给确定检查，模型只评可读性等软目标；保留少量人工复核案例，定期确认评委没有奖励隐藏未完成项。 <a class="note-back" href="#note-ref-2" role="doc-backlink" aria-label="返回正文脚注 2">↩ 返回正文</a></p></li></ol></section>
+</article><nav class="chapter-pager" aria-label="章节翻页"><a href="react.html">上一章 · ReAct：让模型真正调用工具</a><a href="04.html">下一章 · 搭建一条 RAG 链路</a></nav>
+<footer class="book-footer"><span>AI 工程师：从原理到实践</span><span>第 03 章 · 完整章节</span></footer></main></div>
+<p id="notice" class="sr-only" role="status"></p></body></html>

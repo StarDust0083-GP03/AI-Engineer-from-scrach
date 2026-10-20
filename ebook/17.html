@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>用 LangGraph 组织应用 · AI 工程师</title><link rel="stylesheet" href="reader.css">
+<script defer src="reader.js"></script>
+</head>
+<body><a class="skip" href="#main">跳到正文</a><header class="bar"><div class="bar-inner"><a class="brand" href="index.html">← 全书目录</a><div class="reader-tools" role="group" aria-label="阅读设置"><button data-size="-2" aria-label="减小字号">A−</button><span id="font-value" aria-live="polite">20px</span><button data-size="2" aria-label="增大字号">A＋</button><button class="print" data-print>打印 / PDF</button></div></div><div class="progress" aria-hidden="true"></div></header>
+<div class="reader-layout"><aside class="chapter-toc"><span class="part-label">本章导航</span><nav aria-label="本章目录"><a href="#why">从链到图</a><a href="#diagram">三种编排范式</a><a href="#chain">LangChain 与单 Agent</a><a href="#multi">多 Agent 研究系统</a><a href="#graph">LangGraph 的核心</a><a href="#persist">持久化与 HITL</a><a href="#chatbot">实战一：Agentic Chatbot</a><a href="#tripmate">实战二：TripMate</a><a href="#foundation">两个基础加固</a><a href="#external">延伸对照</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav><p>海洋浮标观测与数据质检助手</p><p>先检查证据和状态，再判断输出是否足以交付。练习可用纸笔完成，服务调用需自行配置。</p></aside>
+<main id="main" class="reading"><article><header class="chapter-head"><span class="edition">第五篇 · 综合项目与延伸阅读</span><h1>用 LangGraph 组织应用</h1><p class="deck">浮标质检既有固定计算，也有取证分支和人工放行。用节点、边与状态把这些差异写清，再讨论检查点到底恢复什么。</p><p class="meta">第 17 篇阅读材料 · 海洋观测教学场景 · 数值推演与源码说明分开标注</p></header>
+<details class="mobile-toc"><summary>本章目录 · 14 个小节</summary><nav aria-label="移动版本章目录"><a href="#why">从链到图</a><a href="#diagram">三种编排范式</a><a href="#chain">LangChain 与单 Agent</a><a href="#multi">多 Agent 研究系统</a><a href="#graph">LangGraph 的核心</a><a href="#persist">持久化与 HITL</a><a href="#chatbot">实战一：Agentic Chatbot</a><a href="#tripmate">实战二：TripMate</a><a href="#foundation">两个基础加固</a><a href="#external">延伸对照</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+</details>
+
+<section id="why"><h2>从链到图</h2>
+<p>每天生成缺测统计可以是一条直线：读取、计算、保存。遇到异常温度时，流程可能需要检查标定、查询邻站、请求值班员确认，最后才发布报告。若把所有选择藏在一段模型提示里，重启后很难知道停在何处，也难以解释为何跳过了某项校验。</p><p>LangGraph 允许把应用显式表示为节点、边和共享状态。节点完成局部工作，边决定可到达的下一步，状态保存已经获得的事实与执行信息。模型可以在某个节点里选择工具，但图外层仍能限制它什么时候必须停下等人。</p><p><code>11-langgraph/</code> 包括课程、Agentic Chatbot 和 TripMate。它们提供图编排的不同观察入口。以下浮标流程是教学改造场景，源码事实仍按各项目实际功能说明，不能把新的质检字段当成这些项目已经提供的接口。</p>
+</section>
+
+<section id="diagram"><h2>三种编排范式</h2>
+<p>同一个业务需求未必需要相同结构。这张图按控制权与恢复需求区分三种方案。</p>
+<h3>Chain</h3>
+<figure class="book-diagram" aria-label="固定统计链"><pre>取 72 个时槽 → 数空值 → 计算缺测率 → 写草稿
+控制者：程序固定顺序
+适用：无分支的日报计算
+恢复：可从输入整体重算，但写入应幂等</pre><figcaption>固定流程通常便于测试，没必要仅为增加框架名引入自主决策。</figcaption></figure>
+<h3>Agent</h3>
+<figure class="book-diagram" aria-label="开放取证循环"><pre>模型选择查标定 / 查邻站 / 读日志
+       ↑                    ↓
+       └──── 获得新观察 ─────┘
+控制者：模型在允许工具内决定后续取证
+限制：步数、时限、费用和工具权限</pre><figcaption>灵活调查需要明确停机，不应把无限尝试当作更认真。</figcaption></figure>
+<h3>Graph</h3>
+<figure class="book-diagram" aria-label="审批状态图"><pre>读取 → 校验范围 → 分析
+                   ├─ 证据不足 → 澄清 / 结束
+                   ├─ 正常 → 草稿
+                   └─ 可疑 → 人工确认 → 草稿
+草稿 → 发布门 → 归档</pre><figcaption>图把必须出现的分支显式化。边的存在不保证节点内容正确，还需数据契约。</figcaption></figure>
+</section>
+
+<section id="chain"><h2>LangChain 与单 Agent</h2>
+<p>Chain 把处理顺序写进程序，单 Agent 把下一步交给模型，图则定义合法转移并允许节点内部保留自主性。三者可以组合：图中的“调查异常”节点可以包含一个有界工具循环，结果仍必须满足图状态的字段约定。</p><p>课程中的 LangChain 例子使用 ReAct Agent、工具适配和界面，适合查看 schema、执行器和观察回填怎样连接。迁移到新任务时，可以先只给两类教学工具：读取浮标记录与查询标定版本，观察单 Agent 是否能在预算内拿齐证据。工具必须返回时间范围和数据来源，不能只给无上下文数值。</p><p><code>create_react_agent</code> 等同名函数在不同库与版本中可能指不同封装，<code>AgentExecutor</code> 也属于特定链路。阅读时核对 import 来源和依赖版本，不把课件里的名称直接拼成新 API。框架适配能省接线代码，但不能替代设备范围校验、缺测语义与模型异常处理。</p>
+</section>
+
+<section id="multi"><h2>多 Agent 研究系统</h2>
+<p>把异常分析分给取证者、解释者、报告者与复核者时，应明确每个角色的输入输出。取证者输出带编号的记录片段；解释者输出候选原因与支持程度；报告者只组织已获证据；复核者检查断言是否超出原始观测。角色名称不同不等于判断独立，若所有人都只读上一位的结论，最初的误读仍会一路传播。</p><p>课程的多角色研究流水线展示角色交接与批评回传。映射到质检时，复核者发现报告漏掉标定有效期，需要把具体失败断言交回解释环节，而非让报告者单纯换一种说法。这会产生回边，图结构因此比只前进的链更适合表示修订。</p><p>回边应有限制，比如最多两次补证或总计 20 秒的教学预算。共享状态保存证据 ID 和版本，避免整份聊天记录逐级复制；失败记录保留“缺的是哪条依据”，不只保留“请更严谨”。多角色的收益需在同样模型和预算下检验，不能从角色数推导准确率。</p>
+</section>
+
+<section id="graph"><h2>LangGraph 的核心</h2>
+<p>StateGraph 的状态可以理解为一份有字段所有权的任务记录。节点通常返回状态更新，而非任意修改所有字段。多个并行节点写同一键时，需要明确合并语义或 reducer，不能假定后完成的结果总该覆盖先完成的值。</p><table><thead><tr><th>图机制</th><th>质检教学对应</th><th>需要定义的边界</th></tr></thead><tbody><tr><td>State</td><td>设备、时间段、证据、草稿、审批状态</td><td>哪些字段是输入，哪些是计算产物</td></tr><tr><td>普通边</td><td>读取完成后计算</td><td>输入字段必须已齐</td></tr><tr><td>条件边</td><td>证据不足转澄清</td><td>条件来源与空值处理</td></tr><tr><td>Subgraph</td><td>复用一套标定核对过程</td><td>子流程输入输出与父图映射</td></tr><tr><td>Checkpointer</td><td>保留审批前后的执行快照</td><td>存储持久性、线程键与版本</td></tr><tr><td>校验节点</td><td>拒绝超出授权范围的读取</td><td>不能只靠模型自报“合规”</td></tr></tbody></table><p>一条有用的不变量是“没有 evidence_ids 不得进入可发布状态”。它应在程序边界检查，不能只写在 Writer 的角色说明里。每个条件最好能由保存的字段解释；若边的选择依赖无法追查的自由文本，图虽然画得显式，行为仍可能模糊。<sup><a class="note-ref" id="note-ref-1" href="#note-1" role="doc-noteref" aria-label="脚注 1：图的复杂度也会失控">[1]</a></sup></p>
+</section>
+
+<section id="persist"><h2>持久化与 HITL</h2>
+<p>审批等待期间重启进程，恢复依赖持久状态，而非前端还开着。Chatbot 与 TripMate 的本地示例使用 SQLite checkpointer 保存线程状态；同一个 thread 标识用于继续相同流程，不同标识应隔开历史。生产部署还要处理存储位置、访问控制与多进程连接。</p><p>教学任务走到“是否发布 B17 可疑观测说明”时，可中断并返回待审内容，包括设备、时间范围、证据摘要和草稿 hash。前端收到用户决定后将其作为 resume 输入交回同一线程。批准旧草稿后若内容变了，审批应失效，不能只因状态里存在 approved 就放行。<sup><a class="note-ref" id="note-ref-2" href="#note-2" role="doc-noteref" aria-label="脚注 2：状态迁移要有版本">[2]</a></sup></p><p>使用 <code>interrupt</code> 时尤其要理解重执行语义：恢复通常会重新进入相应节点的代码，不能把中断前的外部副作用当成只执行一次。发送或写入应与幂等键绑定，或者移到批准之后的独立节点。检查点恢复图状态不等于事务性撤回网络调用，SQLite 的事务也不会自动覆盖外部报告服务。</p>
+</section>
+
+<section id="chatbot"><h2>实战一：Agentic Chatbot</h2>
+<p>Agentic Chatbot 展示对话界面、工具、PDF RAG、多会话与审批如何组装。它原有的业务工具是源码事实，学习时可以只观察“普通回答”“检索回答”“暂停等待授权”的三条控制路径，再设计自己的海洋质检工具。</p><table><thead><tr><th>源码能力边界</th><th>可迁移的教学任务</th><th>验收关注</th></tr></thead><tbody><tr><td>工具目录</td><td>读取浮标时槽与计算统计</td><td>输入校验、错误类型与只读范围</td></tr><tr><td>PDF RAG</td><td>检索传感器维护手册</td><td>页码、型号、版本和证据片段</td></tr><tr><td>interrupt / resume</td><td>确认是否外发质检草稿</td><td>审批关联当前线程与草稿</td></tr><tr><td>SQLite 线程状态</td><td>不同值班组保持独立任务</td><td>恢复后仍然正确隔离</td></tr><tr><td>Streamlit 前端</td><td>上传资料、看消息与待审项</td><td>UI 不把等待态显示成完成态</td></tr></tbody></table><p>项目对嵌入模型做懒加载，普通对话无需先加载全部 RAG 依赖。首次使用检索的额外延迟与模型调用慢应分开统计。更换嵌入模型时，新向量空间与旧索引不必兼容，应创建新索引并校验，而不是删除唯一现存库后再盲目重建。</p><p>维护手册上传成功只能证明收件，不证明已解析、向量化或可召回。界面应分别显示入库阶段，故障日志也应带同一文档任务号。没有命中时明确缺证据，不能由模型凭设备名称编造维护要求。</p>
+</section>
+
+<section id="tripmate"><h2>实战二：TripMate</h2>
+<p>TripMate 的实际项目领域是旅行规划，父图按顺序调用专家并共享 <code>TravelState</code>，采用 FastAPI 与 SQLite 检查点。本节保留它作为源码入口，但不沿用旅行问答案例，而用“浮标维护准备”解释相同的顺序交接约束。这是设计类比，原项目并未提供以下质检节点。</p><div class="code-label"><span>新教学编排，非 TripMate API</span><button data-copy="code-trip" aria-label="复制维护准备流程">复制</button></div><pre role="region" tabindex="0" aria-label="维护准备流程"><code id="code-trip">状态：设备 ID、故障证据、标定版本、维护建议、最终草稿
+1. 观测专家：识别缺测与突变，不判断维修授权。
+2. 标定专家：核对适用期与设备型号。
+3. 维护专家：根据已确认故障列候选操作。
+4. 汇总专家：保留依据与待确认项，不补造事实。
+父图：规定顺序，并保存各阶段状态。</code></pre><p>维护专家依赖故障证据，所以不能为了并行就提前按猜测开工。如果最后核对发现设备型号有误，前面的标定和建议都会失效。只向前交接的图需要明确回退路径或重规划规则，否则恢复只是从已有错误状态继续。</p><p>共享状态减少转述丢失，也可能传播陈旧字段。重跑观测节点时应清空或标记失效的下游建议，并记录数据版本。checkpoint 保存过去是什么，业务逻辑还需说明哪些过去结果仍然有效。</p>
+</section>
+
+<section id="foundation"><h2>两个基础加固</h2>
+<p>异步和结构化校验决定了图节点能否稳定交接。异步适合等待独立 I/O，比如同时取两个设备的只读记录；计算密集或阻塞函数直接放进 async 节点仍可能阻塞事件循环。设置超时、并发上限与取消传播，比单纯使用 <code>asyncio.gather</code> 更重要。</p><p>Pydantic 可以检查设备字符串、起止时间和结果结构，但“两个时间字段都能解析”不保证结束晚于开始，也不保证用户有权读取该设备。应在模型之外验证跨字段约束和业务权限。对于缺测值，明确允许 null，不能让默认值 0 悄悄改变观测意义。</p><p>并行结果的合并同样需要契约。两个节点返回相同 evidence_id 时要去重，来源版本冲突时要保留冲突而非随意覆盖。类型正确、业务有效和授权允许是三道不同检查。</p>
+</section>
+
+<section id="external"><h2>延伸对照：图编排的定位</h2>
+<p>图提供可执行结构，任务策略仍由开发者设计。框架自带持久化不意味着所有业务步骤都有正确恢复语义。</p>
+<h3>与推理模式的关系</h3>
+<p>规划与执行可做两个节点，反思可以在验证失败时回到调查节点，树搜索需要在状态里保存候选与预算。框架不会自动选择适合质检的评分函数；若把错误的候选原因打高分，图只会更稳定地执行错误策略。</p>
+<h3>与多 Agent 框架的关系</h3>
+<p>AutoGen 倾向描述谁接着发言，CrewAI 倾向描述角色承担什么任务，LangGraph 倾向描述状态怎样转移。这是便于阅读的对照，并非互斥能力边界。选型时可给三种方案同一条异常日志，比较证据保真、修订次数和暂停恢复，而不是只比较代码长短。</p>
+<h3>与持久化/工作流引擎的关系</h3>
+<table><thead><tr><th>恢复问题</th><th>图需要的机制</th><th>业务还需补充</th></tr></thead><tbody><tr><td>审批中重启</td><td>持久检查点与稳定线程键</td><td>审批身份、内容版本及有效期</td></tr><tr><td>节点失败重试</td><td>重试与错误路由</td><td>副作用幂等、重试上限</td></tr><tr><td>外部发送已发生</td><td>保存发送结果</td><td>查询幂等状态或执行补偿</td></tr></tbody></table><p><a href="https://langchain-ai.github.io/langgraph/">LangGraph 文档</a> 和 <a href="https://python.langchain.com/">LangChain 文档</a> 可核对版本接口，<a href="https://docs.pydantic.dev/">Pydantic 文档</a> 用于校验细节。<a href="https://www.anthropic.com/engineering/building-effective-agents">Building Effective Agents</a> 提醒从可验证的简单流程起步；只有明确需要分支和恢复时才承担图状态的维护成本。</p>
+</section>
+
+<section id="practice"><h2>动手验证</h2>
+<p>这些练习可先用固定节点返回值完成，不必访问外部模型或真实海洋设备。</p>
+<h3>练习一：把 Chain 改写成图</h3>
+<p>把“读记录、算缺测率、写草稿”画成直线，再增加“记录为空则询问时间段”的分支。设最多澄清两次，列出终止状态。检查空列表和工具失败是否被错误地归为同一事件。</p>
+<h3>练习二：给 Chatbot 加一条 HITL</h3>
+<p>在隔离副本中为“外发草稿”设计中断，待审状态保存 thread_id、草稿 hash 和目标地址。恢复时让批准只匹配当前草稿，拒绝或过期都不得调用发送 stub。不要用真实邮件练习。</p>
+<h3>练习三：制造一次恢复</h3>
+<p>暂停后关闭进程，再读取同一线程继续。让发送 stub 按任务幂等键记录调用，验证恢复不会重复发送。如果换一个线程 ID，解释为何找不到原待审状态。</p>
+<h3>练习四：判断该不该用图</h3>
+<p>分别评估“每小时缺测统计”“开放调查突变原因”“审批后发报告”三个需求。对每个需求写出最简单可行结构，以及升级到图能新增的具体控制，不能仅回答“复杂所以用图”。</p>
+</section>
+
+<section id="recap"><h2>回顾与自测</h2>
+<p>浮标质检流程的图设计要回答：字段从哪来，分支为何发生，暂停保存什么，以及恢复后什么动作允许重做。能明确这四点，框架名称才有实际意义。</p><details><summary>有工具循环就必须用 StateGraph 吗？</summary><div><p>不必。简单有界循环可以直接实现，需要显式分支、等待与恢复时图结构才更有价值。</p></div></details><details><summary>检查点里的记录可以当作长期记忆吗？</summary><div><p>它首先服务执行恢复，包含当时的任务状态。长期记忆要另做事实筛选、时效与跨会话检索，不能直接把所有 checkpoint 注入模型。</p></div></details><details><summary>为什么重跑上游还要处理下游字段？</summary><div><p>旧建议可能依赖旧证据。若不失效处理，最终报告会混用新观测与旧推断，结构正确却语义不一致。</p></div></details><p><a href="18.html">配置化 Harness 与端侧 Agent</a> 将继续讨论执行边界如何随部署方式变化。</p>
+</section>
+
+<section id="sources"><h2>源码与编写说明</h2>
+<p>项目结构按快照 <code>d9e02cb</code> 的三组 README 追溯。本文新增质检流程用于说明图语义，不宣称 Chatbot 或 TripMate 已实现海洋数据接口。恢复和并行的解释是工程边界说明，不是在线服务实测。</p><ul class="source-list"><li><a href="../11-langgraph/01-project-Complete-Agentic-AI-Course/README.md">01-project-Complete-Agentic-AI-Course/README.md</a></li><li><a href="../11-langgraph/02-Agentic-Chatbot-using-LangGraph/README.md">02-Agentic-Chatbot-using-LangGraph/README.md</a></li><li><a href="../11-langgraph/03-project-TripMate-AI-A-Multi-Agent-Travel-Planner-with-LangGraph/README.md">03-project-TripMate/README.md</a></li></ul><p>运行真实项目需其声明的依赖和模型配置，纸上练习与固定 stub 可以独立完成。</p>
+</section>
+
+<section id="notes" class="footnotes" role="doc-endnotes"><h2>补充脚注</h2>
+<p>补充两项长期维护图状态时容易忽略的问题。</p><ol><li id="note-1"><p>给每个子图列出输入字段、输出字段、错误和可重入边界。边数增多后，应检查不可达节点、无出口循环和重复副作用路径，而非只看流程图是否整齐。 <a class="note-back" href="#note-ref-1" role="doc-backlink" aria-label="返回正文脚注 1">↩ 返回正文</a></p></li><li id="note-2"><p>待审流程可能跨版本存活。状态字段或图节点改名时要有迁移、兼容或明确终止策略；新版本不能默默把旧 pending 解释成 approved。 <a class="note-back" href="#note-ref-2" role="doc-backlink" aria-label="返回正文脚注 2">↩ 返回正文</a></p></li></ol>
+</section>
+</article><nav class="chapter-pager" aria-label="章节翻页"><a href="16.html">上一章 · Pi：Core 与 Interactive</a><a href="18.html">下一章 · DeepSeek Harness 与边缘 Agent</a></nav>
+<footer class="book-footer"><span>AI 工程师：从原理到实践</span><span>第 17 章 · 完整章节</span></footer></main></div>
+<p id="notice" class="sr-only" role="status"></p></body></html>

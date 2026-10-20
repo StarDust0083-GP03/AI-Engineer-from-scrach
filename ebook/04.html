@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>搭建一条 RAG 链路 · AI 工程师</title><link rel="stylesheet" href="reader.css">
+<script defer src="reader.js"></script>
+</head>
+<body><a class="skip" href="#main">跳到正文</a><header class="bar"><div class="bar-inner"><a class="brand" href="index.html">← 全书目录</a><div class="reader-tools" role="group" aria-label="阅读设置"><button data-size="-2" aria-label="减小字号">A−</button><span id="font-value" aria-live="polite">20px</span><button data-size="2" aria-label="增大字号">A＋</button><button class="print" data-print>打印 / PDF</button></div></div><div class="progress" aria-hidden="true"></div></header>
+<div class="reader-layout"><aside class="chapter-toc"><span class="part-label">本章导航</span><nav aria-label="本章目录"><a href="#why">模型不知道你的文档</a><a href="#diagram">两条流水线</a><a href="#offline">离线：索引阶段</a><a href="#online">在线：问答阶段</a><a href="#code">把链路串起来</a><a href="#boundaries">边界与工程取舍</a><a href="#practice">动手验证</a><a href="#external">延伸对照</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+<p>第二篇 / 第 04 章<br>建议阅读 24 分钟<br>练习另计</p><p>本章以纯 Python 实现的最小闭环为主，不依赖 LangChain。</p></aside>
+<main id="main" class="reading"><article><header class="chapter-head"><span class="edition">第二篇 · 让 Agent 拥有知识与记忆</span><h1>搭建一条 RAG 链路</h1><p class="deck">维修员询问低压胎与制动故障怎样分级处理，助手应检索本市维护规程的有效条款。本章把文档解析、切块、向量检索和带出处回答连成可检查的数据链。</p><p class="meta">第 04 章 · 完整章节 · 先修：Python、基本的向量与相似度概念</p></header>
+<details class="mobile-toc"><summary>本章目录 · 10 个小节</summary><nav aria-label="移动版本章目录"><a href="#why">模型不知道你的文档</a><a href="#diagram">两条流水线</a><a href="#offline">离线：索引阶段</a><a href="#online">在线：问答阶段</a><a href="#code">把链路串起来</a><a href="#boundaries">边界与工程取舍</a><a href="#practice">动手验证</a><a href="#external">延伸对照</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+</details>
+
+<section id="why"><h2>模型不知道你的文档</h2><p>公共自行车维护规程会按车型和区域更新。维修员问“制动拉杆到底后仍无法抱紧，能否继续投入运营”，模型可能按一般自行车常识回答，却不知道本市规程要求先停运、挂故障标记并生成检修记录。把普通经验写成当地规则，会直接影响车辆安全。</p><p>检索增强生成先从受控文档里找证据，再把证据交给模型解释。教学资料设定为《公共自行车维护规程 v3》：条款 B-4 规定制动失效车辆停运；条款 T-2 规定低胎压先复测与补气。问题命中 B-4 时，答案应附文档版本和条款位置，不能用另一条关于胎压的建议替代。</p><p>RAG 不会修改模型参数。入库只是建立检索结构，回答时仍要把相关片段送到模型。它也无法凭空补回被解析器漏掉的条款。若扫描页没有文字层且未做 OCR，向量库里就根本不存在该页证据。</p><p>本章保留纯 Python RAG 项目的源码入口，另编维护手册场景。示例中的文档名、条款与分数都是教学设定，没有接入真实城市规程或远程模型。读者可以用这些固定内容核对每一环的输入输出。</p></section>
+
+<section id="diagram"><h2>两条流水线</h2><p>索引建设与问答服务相互独立，但必须共享同一套表示约定。版本清单把两条链连接起来，比只保存一个向量文件更容易排查问题。</p><figure class="book-diagram" aria-label="公共自行车助手的状态与证据对照"><h3>离线 · 建索引</h3><table><thead><tr><th scope="col">落盘对象</th><th scope="col">由什么产生</th><th scope="col">要验证的关系</th></tr></thead><tbody><tr><td>chunks</td><td>解析后的条款与切块</td><td>来源、页码、版本可追踪</td></tr><tr><td>vectors</td><td>嵌入器编码</td><td>行数与 chunks 一致</td></tr><tr><td>manifest</td><td>模型与语料标识</td><td>模型版本、维度、归一化约定固定</td></tr></tbody></table><p>构建完成后先检查向量数、块数和来源清单，再将整套索引作为一个版本发布。部分文件更新成功不应算完整构建。</p><h3>在线 · 问答</h3><table><thead><tr><th scope="col">问答时读取</th><th scope="col">操作</th><th scope="col">错误信号</th></tr></thead><tbody><tr><td>用户问题</td><td>同模型编码</td><td>维度或模型标识不符</td></tr><tr><td>候选条款</td><td>检索与去冗余</td><td>只有词相似，没有操作条件</td></tr><tr><td>证据包</td><td>生成并标注出处</td><td>答复超出有效条款</td></tr></tbody></table><p>查询端不能只因向量维度相同就接受旧索引。不同模型即使输出相同维度，坐标含义也可能不同。</p><figcaption>表中数据均为教学设定，用于追踪输入、状态与可核查结果。</figcaption></figure></section>
+
+<section id="offline"><h2>离线：索引阶段</h2><p>离线阶段处理的是可重复构建的语料产物。原文和解析结果最好分别保留，便于区分文件本身缺内容，还是解析器丢了内容。</p><h3>第一步：解析文档</h3><p>按扩展名选择解析器只是起点。PDF、Word 与 HTML 的阅读顺序、表格和标题结构不同，统一为纯文本时应记录有意义的位置。保留页码与条款号，可以让维修员回到原件复核。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-clean" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-clean">import re
+def normalize_manual(text):
+    text = text.replace(&quot;\r\n&quot;, &quot;\n&quot;).replace(&quot;\r&quot;, &quot;\n&quot;)
+    lines = [re.sub(r&quot;[ \t]+&quot;, &quot; &quot;, line).strip() for line in text.split(&quot;\n&quot;)]
+    return re.sub(r&quot;\n{3,}&quot;, &quot;\n\n&quot;, &quot;\n&quot;.join(lines)).strip()
+assert normalize_manual(&quot;B-4  停运\r\n\r\n\r\n记录&quot;) == &quot;B-4 停运\n\n记录&quot;</code></pre><p>清洗不能把所有空白无差别删除。型号内的空格、表格列边界和段落分隔可能承载结构。跨页重复标题可以按版面位置去除，但“停车后复测”等重复业务条款不能仅因多次出现而删除。</p><h3>第二步：滑动窗口分块</h3><p>固定窗口需要保证进度，也要接受它可能切断语义。原项目会尝试在附近寻找边界，这只能降低截断概率，不能保证每个条款完整。下面用较小窗口演示重叠和起止位置。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-chunk" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-chunk">def windows(text, size=80, overlap=20):
+    if not 0 &lt;= overlap &lt; size:
+        raise ValueError(&quot;overlap 必须小于窗口大小&quot;)
+    result = []
+    for start in range(0, len(text), size - overlap):
+        end = min(start + size, len(text))
+        result.append({&quot;start&quot;: start, &quot;end&quot;: end, &quot;text&quot;: text[start:end]})
+        if end == len(text):
+            break
+    return result
+chunks = windows(&quot;甲&quot; * 170)
+assert [(c[&quot;start&quot;], c[&quot;end&quot;]) for c in chunks] == [(0,80),(60,140),(120,170)]</code></pre><p>重叠增加了重复内容和存储量。对“条件在上一段、处置在下一段”的规程，最好按完整条款切分，过长时再在条款内部使用窗口，并将父条款编号写进元数据。<sup><a class="note-ref" id="note-ref-1" href="#note-1" role="doc-noteref" aria-label="脚注 1：分块策略">[1]</a></sup> 如果块里只有“应立即停运”，没有故障条件，检索命中仍可能导致误答。</p><h3>第三步：嵌入与建索引</h3><p>嵌入把文本转换成可比较的向量。使用 BAAI/bge-small-zh-v1.5 时，需要保留模型标识、编码参数和依赖版本。首次加载可能下载权重，本次没有下载或测量其速度。</p><div class="code-label"><span>片段：model 为已加载的 SentenceTransformer 实例，需其依赖和权重</span><button data-copy="code-embed" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-embed">def encode_chunks(model, chunks, batch=16):
+    vectors = []
+    for offset in range(0, len(chunks), batch):
+        texts = [c[&quot;text&quot;] for c in chunks[offset:offset + batch]]
+        encoded = model.encode(texts, normalize_embeddings=True)
+        vectors.extend(encoded.tolist())
+    return vectors</code></pre><p>对单位向量，内积等于余弦相似度。若不归一化，较长向量可能因范数大而占优。零向量无法通过普通除法归一化，应当在构建检查中拒绝或标记异常。FAISS IndexFlatIP 做精确内积搜索，规模与延迟是否可接受应实际测量，不宜按某个固定文档数量机械换索引。</p><div class="code-label"><span>片段：需要 numpy 与 faiss，不在本页执行权重推理</span><button data-copy="code-vs" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-vs">import numpy as np
+import faiss
+def build_flat(vectors):
+    matrix = np.asarray(vectors, dtype=&quot;float32&quot;)
+    if matrix.ndim != 2 or len(matrix) == 0:
+        raise ValueError(&quot;需要非空二维向量&quot;)
+    if not np.isfinite(matrix).all() or (np.linalg.norm(matrix, axis=1) == 0).any():
+        raise ValueError(&quot;存在不可检索的向量&quot;)
+    faiss.normalize_L2(matrix)
+    index = faiss.IndexFlatIP(matrix.shape[1])
+    index.add(matrix)
+    return index</code></pre><p>持久化时向量索引、文本映射和清单必须一起切换。原示例保存 chunks.pkl，应只读取可信的本地构建产物，不能加载用户上传的 pickle。替换为安全序列化格式时也要验证行号映射，避免第 10 个向量错配成第 11 段文本。</p></section>
+
+<section id="online"><h2>在线：问答阶段</h2><p>在线阶段的输出除了答案，还应能带出检索记录：查询版本、候选 ID、排序分数和最终引用。这样才能知道错误发生在哪一跳。</p><h3>第一步：检索</h3><p>检索会返回最近的候选，即使库里没有答案也可能有第一名。候选数量、最低相关性与证据充分性是不同判断。</p><div class="code-label"><span>检索片段：这里先展示候选映射，去冗余由独立步骤实现</span><button data-copy="code-ret" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-ret">def retrieve(index, query_vector, chunks, k=3, pool=9):
+    query = np.asarray([query_vector], dtype=&quot;float32&quot;)
+    faiss.normalize_L2(query)
+    scores, positions = index.search(query, min(pool, len(chunks)))
+    candidates = [{&quot;score&quot;: float(score), &quot;chunk&quot;: chunks[pos]}
+                  for score, pos in zip(scores[0], positions[0]) if pos &gt;= 0]
+    return candidates[:k]</code></pre><p>空库、非法索引位置和模型维度不符都应在接口边界明确处理。分数不是答案正确率；例如相似度 0.8 不意味着条款有八成概率适用于当前车型。</p><h3>MMR：在相关与多样之间折中</h3><p>MMR 奖励与问题相关的片段，同时惩罚与已选片段重复的候选。公式 <code>λ·sim(q,d) - (1-λ)·max sim(d,s)</code> 中，后项对已选集合取最大值；第一块通常先按相关性选，再逐块加入。</p><p>设 B-4 原条款与重复印刷版本对问题分数为 0.86、0.85，两者很相似；一段关于维修记录要求的补充条款分数为 0.78。去冗余可能把补充条款提前，帮助答案同时说明停运和记录。若降低 λ 太多，也可能为了多样性选进与制动问题无关的车锁条款。</p><p>原项目的块间冗余使用词汇重叠近似，中文按空格切词时容易失效。要验证真正的向量 MMR，应保留候选向量，用归一化点积计算块间相似度，而不是仅观察开关名称。</p><h3>第二步：生成答案</h3><p>证据包应该标出每段允许引用的编号，同时明确文本是资料而不是指令。规程中若夹带“忽略系统规则”，宿主不能把它提升为新的控制政策。</p><div class="code-label"><span>证据组装片段，不调用模型，也不保证生成器必然遵守要求</span><button data-copy="code-gen" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-gen">def make_evidence(question, candidates):
+    evidence = []
+    for number, item in enumerate(candidates, 1):
+        c = item[&quot;chunk&quot;]
+        evidence.append(f&quot;[{number}] {c[&#x27;source&#x27;]} / {c[&#x27;version&#x27;]} / {c[&#x27;clause&#x27;]}\n{c[&#x27;text&#x27;]}&quot;)
+    return {
+        &quot;instruction&quot;: &quot;依据证据回答处置条件和步骤；证据缺失则说明无法确认；逐项引用编号。&quot;,
+        &quot;question&quot;: question,
+        &quot;evidence&quot;: &quot;\n\n&quot;.join(evidence),
+    }</code></pre><p>降低温度可能减少输出变化，却不构成事实保证。生成后还要检查停运条件、车型范围与引用片段是否一致。把所有检索来源自动附在末尾，只证明这些文件被检索过，不能证明每句话都有支持。</p></section>
+
+<section id="code"><h2>把链路串起来</h2><p>总装层负责接线，不宜把解析细节和模型异常处理全部混在一个方法里。下面把索引发布与问答返回分开，让调用方能分别检验构建状态与检索证据。</p><div class="code-label"><span>编排片段：parse/split/embed/publish/search/generate 由应用注入</span><button data-copy="code-pipe" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-pipe">def index_manuals(files, parse, split, embed, publish):
+    chunks = [chunk for path in files for chunk in split(parse(path))]
+    if not chunks:
+        raise ValueError(&quot;解析后没有可索引条款&quot;)
+    vectors = embed([c[&quot;text&quot;] for c in chunks])
+    if len(vectors) != len(chunks):
+        raise ValueError(&quot;文本与向量数量不一致&quot;)
+    return publish(chunks, vectors)
+
+def answer_manual(question, search, generate):
+    candidates = search(question)
+    if not candidates:
+        return {&quot;answer&quot;: &quot;当前索引没有足够证据。&quot;, &quot;evidence&quot;: []}
+    return {&quot;answer&quot;: generate(make_evidence(question, candidates)),
+            &quot;evidence&quot;: candidates}</code></pre><p>构建函数不要仅凭索引文件存在就跳过。可以比较语料内容哈希、模型指纹和切块配置。重建时先写入新版本目录，通过完整性检查后再切换读指针；中途失败仍保留旧版本可用。</p><h3>一次演示问题的走向</h3><p>维修员描述“制动拉杆到底但车轮仍可转动”。查询编码后召回 B-4 和一段维修登记条款，去掉重复印刷页，再组装带版本与条款号的证据。教学期望回答为停止投放、标记故障并登记检修，同时引用 B-4。</p><p>若检索只返回 T-2 低胎压条款，生成器应说明证据不足。不能因为都属于自行车维护，就从补气步骤推断制动故障可以继续运营。这个反例能用来检查阈值和拒答策略，不需要远程模型也能先验收检索是否正确。</p></section>
+
+<section id="boundaries"><h2>边界与工程取舍</h2><p>每项优化都应定位到具体数据损失。不要一次同时修改切块、嵌入和提示词，否则即使分数变好也难以解释原因。</p><h3>固定窗口分块会切断语义</h3><p>固定窗口可能把车型范围、否定条件或表格列名与处置动作分开。检索到动作而漏掉限制，会让答案扩张适用范围。可以按条款保留父块，检索子块后回填邻近条件，但回填也会增加噪声，需要在评估集上测量。</p><h3>嵌入模型决定了检索上限</h3><p>精确故障码和车型编号可能被语义向量弱化。先检查正确条款是否已经入库，再测同义问法和精确编码是否能召回。若精确词失败，可补关键词路；若解析根本没有条款，换更大模型不会解决。</p><h3>Top-K 不是越大越好</h3><p>增大 K 可能增加覆盖，也可能把过期规程或其他车型条件一起送进上下文。<sup><a class="note-ref" id="note-ref-2" href="#note-2" role="doc-noteref" aria-label="脚注 2：先看检索，再看生成">[2]</a></sup> 可以先扩大候选池，再按版本、权限与精排过滤，控制最终交给模型的证据数量。拒答阈值应按自己的正负样本校准，不从别人的示例照搬。</p><h3>索引更新是手工的</h3><p>只判断 load 成功无法发现文档更新。新规程生效后，旧块需要失效，删除的条款也需要从索引移除。清单应记录来源哈希和有效期；增量索引要保证删除与新增都完成，不能只追加新内容让两个版本长期混用。</p><h3>答案里的引用不等于答案正确</h3><p>来源引用是可追查入口，正确性还要求“引用确实支撑该断言”。把 B-4 引在低胎压处置后面也能形成看似完整的引用，但并无支持关系。对安全敏感的处置，可以要求生成结构化条件和动作，再用规则或人工复核其引用。</p></section>
+
+<section id="practice"><h2>动手验证</h2><p>先建立很小的教学文档集，包含 B-4 制动条款、T-2 胎压条款和一段无关的车辆外观要求。这样能看清正确命中和干扰项。</p><h3>练习一：观察分块边界</h3><p>用 80 字符窗口和 20 字符重叠切分一段 170 字符的材料，核对起止范围应为 0:80、60:140、120:170。再将 B-4 的条件放到 75 附近，观察是否有某块同时包含条件与动作。把 overlap 改为 0 后重复检查，并记录完整条款的覆盖率，而非只数块的数量。</p><h3>练习二：对比 MMR 开关</h3><p>构造两段文字不同但含义重复的制动条款，再加维修记录要求。比较不开 MMR、词汇重叠 MMR 和向量 MMR 的选集。预期差异必须根据实际候选相似度解释；如果结果相同，先检查块间相似度，而不是认定开关失灵。</p><h3>练习三：只换嵌入模型</h3><p>固定一组人工标注的问题与条款 ID，使用另一嵌入模型重新构建完整索引。记录 Recall@k、索引体积和构建耗时。两个实验只能改变嵌入模型，其他配置保持一致；查询端也必须同步切换。首次下载、缓存命中和推理时间应分别记录，本页没有提供未经测量的性能结论。</p></section>
+
+<section id="external"><h2>延伸对照：RAG 的学术源流与工程生态</h2><p>当前常说的 RAG 流水线包含许多独立工程选择。学术原型能解释表示与检索的动机，但不能直接推导你这份维护规程的最佳配置。</p><h3>原始 RAG</h3><p>Lewis 等的 RAG 结合参数化生成器与非参数化检索证据，DPR 使用分别编码问题和段落的双塔结构。Sentence-BERT 展示了句向量在相似度任务中的效率。现代“查向量库后拼提示词”的应用采用相关思想，却不一定复现原论文的联合训练方式。</p><h3>向量检索为什么快</h3><p>IndexFlatIP 对每个候选做精确比较，优点是行为直接、方便建立召回基线。HNSW 等近似索引通过减少搜索范围改善延迟，但需要测量索引参数下的召回损失。只有先有精确检索基线，才能区分 ANN 漏召回与嵌入表达不足。</p><h3>一个常被忽略的发现</h3><p>Lost in the Middle 研究说明长上下文的信息使用会受位置影响。维护规程中，关键禁用条件即使被送入模型，也可能因为位置和干扰被忽视。证据排序、数量和上下文组织都应作为可测变量，而不是默认“窗口放得下就全放”。</p><h3>全景观与框架</h3><p>框架通常提供加载器、切块器、嵌入器和检索器。替换封装前，先确认它是否保留页码、是否自动归一化、距离分数越大还是越小越好。向量库负责搜索，不会替你解释文档有效期和停运业务约束。</p><table><thead><tr><th scope="col">选择项</th><th scope="col">需要保存的实验信息</th></tr></thead><tbody><tr><td>切块器</td><td>块边界、重叠和条款完整性</td></tr><tr><td>嵌入器</td><td>模型指纹、维度、归一化约定</td></tr><tr><td>检索库</td><td>精确或近似索引、查询参数</td></tr><tr><td>生成器</td><td>证据顺序、提示版本、拒答口径</td></tr></tbody></table><p>原文可查 <a href="https://arxiv.org/abs/2005.11401">RAG</a>、<a href="https://arxiv.org/abs/2004.04906">DPR</a>、<a href="https://arxiv.org/abs/1908.10084">Sentence-BERT</a>、<a href="https://arxiv.org/abs/2307.03172">Lost in the Middle</a> 与 <a href="https://arxiv.org/abs/2312.10997">RAG 综述</a>。</p></section>
+
+<section id="recap"><h2>回顾与自测</h2><p>遇到不正确的维修建议，应沿着原件、解析文本、检索片段和生成答案逐段追查。每一跳都要能找到版本和位置，才能确定该修哪一环。</p><details><summary>归一化以后相似度能当置信度吗？</summary><div><p>不能。归一化让内积与余弦对齐，并未校准为概率。是否支持某个处置结论，需要对条款的条件和动作做语义或规则检查。</p></div></details><details><summary>为什么索引存在仍要检查清单？</summary><div><p>因为文件存在不代表语料、模型和配置匹配。旧规程或旧嵌入模型的索引可能正常加载却给出错误检索。</p></div></details><details><summary>候选第一名来自维护手册，就可以回答吗？</summary><div><p>未必。它可能属于不同故障、车型或版本。需要确认有效且覆盖所问条件，否则应拒绝给出具体处置。</p></div></details><p><a class="button" href="05.html">继续阅读：混合检索、融合与检索决策</a></p></section>
+
+<section id="sources"><h2>源码与编写说明</h2><p>保留 d9e02cb 中最小 RAG 工程的入口供对照。本页重新编写条款场景、图表与代码；依赖 numpy、faiss 或模型实例的片段已标明，不声称本次运行过嵌入推理。</p><ul class="source-list"><li><a href="../02-RAG/01-simple_rag/README.md">01-simple_rag/README.md</a>。从组件关系核对解析、检索和生成边界。</li><li><a href="../02-RAG/01-simple_rag/rag/document_parser.py">rag/document_parser.py</a>、<a href="../02-RAG/01-simple_rag/rag/chunker.py">rag/chunker.py</a>。可对照原项目的字符窗口与边界搜索方式。</li><li><a href="../02-RAG/01-simple_rag/rag/embedder.py">rag/embedder.py</a>、<a href="../02-RAG/01-simple_rag/rag/vector_store.py">rag/vector_store.py</a>。检查归一化、索引维度和持久化映射。</li><li><a href="../02-RAG/01-simple_rag/rag/retriever.py">rag/retriever.py</a>、<a href="../02-RAG/01-simple_rag/rag/generator.py">rag/generator.py</a>。核对候选过滤与证据拼装的实际实现。</li><li><a href="../02-RAG/01-simple_rag/rag/pipeline.py">rag/pipeline.py</a>、<a href="../02-RAG/01-simple_rag/main.py">main.py</a>。从构建与提问入口追踪一条完整调用。</li></ul><p>本页可以离线阅读与复制代码。打开源码链接时，需要让 ebook 与原仓库保持相对位置；在线资料和模型下载另需网络。</p></section>
+
+<section id="notes" class="footnotes" role="doc-endnotes"><h2>补充脚注</h2><p>这两条注释补足正文的操作边界。它们描述设计要求，不代表链接的演示程序已经具备相应保障。</p><ol><li id="note-1"><p>切块应服务于能独立理解的证据单元。规程可按条款、表格可按完整行组组织，长块再细分并保留父级引用。重叠不是语义完整性的证明，要用需要跨边界条件的问题测试。 <a class="note-back" href="#note-ref-1" role="doc-backlink" aria-label="返回正文脚注 1">↩ 返回正文</a></p></li><li id="note-2"><p>把检索失败与生成失败分开：证据包没有 B-4 时，先查解析、过滤和召回；证据包有 B-4 而仍建议继续运营时，再查生成与验证。两种错误混在一起调温度，无法解释改动是否有效。 <a class="note-back" href="#note-ref-2" role="doc-backlink" aria-label="返回正文脚注 2">↩ 返回正文</a></p></li></ol></section>
+</article><nav class="chapter-pager" aria-label="章节翻页"><a href="03.html">上一章 · 规划、反思与搜索</a><a href="05.html">下一章 · 从检索到检索策略</a></nav>
+<footer class="book-footer"><span>AI 工程师：从原理到实践</span><span>第 04 章 · 完整章节</span></footer></main></div>
+<p id="notice" class="sr-only" role="status"></p></body></html>

@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>waku：精简工程实践 · AI 工程师</title><link rel="stylesheet" href="reader.css">
+<script defer src="reader.js"></script>
+</head>
+<body><a class="skip" href="#main">跳到正文</a><header class="bar"><div class="bar-inner"><a class="brand" href="index.html">← 全书目录</a><div class="reader-tools" role="group" aria-label="阅读设置"><button data-size="-2" aria-label="减小字号">A−</button><span id="font-value" aria-live="polite">20px</span><button data-size="2" aria-label="增大字号">A＋</button><button class="print" data-print>打印 / PDF</button></div></div><div class="progress" aria-hidden="true"></div></header>
+<div class="reader-layout"><aside class="chapter-toc"><span class="part-label">本章导航</span><nav aria-label="本章目录"><a href="#why">可读蓝图</a><a href="#diagram">四根支柱</a><a href="#harness">Harness：装配与网关</a><a href="#loop">Loop：95 行循环</a><a href="#memory">Memory：门与三支柱</a><a href="#gate">检索门：先问要不要</a><a href="#consolidate">巩固：每 N 轮蒸馏</a><a href="#ops">Eval 与发布门禁</a><a href="#path">阅读路径</a><a href="#external">延伸对照</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav><p>海洋浮标观测与数据质检助手</p><p>先检查证据和状态，再判断输出是否足以交付。练习可用纸笔完成，服务调用需自行配置。</p></aside>
+<main id="main" class="reading"><article><header class="chapter-head"><span class="edition">第四篇 · 理解模型，阅读真实实现</span><h1>waku：精简工程实践</h1><p class="deck">只用一套小型运行时处理浮标质检：请求装配、工具循环、记忆门控与发布检查分别负责什么，又在哪些地方不能偷省？</p><p class="meta">第 15 篇阅读材料 · 海洋观测教学场景 · 数值推演与源码说明分开标注</p></header>
+<details class="mobile-toc"><summary>本章目录 · 14 个小节</summary><nav aria-label="移动版本章目录"><a href="#why">可读蓝图</a><a href="#diagram">四根支柱</a><a href="#harness">Harness：装配与网关</a><a href="#loop">Loop：95 行循环</a><a href="#memory">Memory：门与三支柱</a><a href="#gate">检索门：先问要不要</a><a href="#consolidate">巩固：每 N 轮蒸馏</a><a href="#ops">Eval 与发布门禁</a><a href="#path">阅读路径</a><a href="#external">延伸对照</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+</details>
+
+<section id="why"><h2>可读蓝图</h2>
+<p>一个岸站先只接入几十台浮标，不需要同时建设多平台网关和复杂插件市场，却仍需要回答有依据、数据不串组、失败可定位。<code>12-hermes-agent-small/</code> 中的 waku 适合观察这些最低限度的工程责任如何拆开。代码少让调用关系容易检查，不表示已经具备大规模生产系统的全部保护。</p><p>本章把“检查 B17 昨夜缺测并生成交班说明”作为任务。请求来自哪里、模型读了什么、工具改了什么以及最终是否可发布，各有单独的负责人。对一个本地优先助手而言，SQLite 里的记录和 JSONL 轨迹就是可以直接检查的证据，而非隐藏在服务里的黑盒状态。</p><table><thead><tr><th>组件</th><th>本任务里的判断</th><th>可留下的证据</th></tr></thead><tbody><tr><td>Harness</td><td>使用哪个会话和配置</td><td>装配版本、输入来源</td></tr><tr><td>Loop</td><td>继续读数据还是返回回答</td><td>模型与工具次序</td></tr><tr><td>Memory</td><td>是否需要过去的标定信息</td><td>门决策、召回来源</td></tr><tr><td>Eval / Ops</td><td>报告是否满足契约</td><td>结构化断言与评分记录</td></tr></tbody></table>
+</section>
+
+<section id="diagram"><h2>四根支柱</h2>
+<p>四根支柱用同一个任务号关联，分别产生不同类型的记录。这张图从最终可追查的证据反推职责。</p>
+<h3>Harness</h3>
+<figure class="book-diagram" aria-label="装配记录"><pre>任务 Q31
+输入：B17 昨夜缺测统计
+装配：Settings → SQLite → Memory → Tools → Session → Tracer
+交给循环：system + recent history + current message</pre><figcaption>装配负责把依赖交齐，不在网关里偷偷执行第二次分析。</figcaption></figure>
+<h3>Loop</h3>
+<figure class="book-diagram" aria-label="循环轨迹"><table><thead><tr><th>迭代</th><th>模型决策</th><th>回填</th></tr></thead><tbody><tr><td>1</td><td>读取昨夜记录</td><td>72 个时槽，其中 6 个空缺</td></tr><tr><td>2</td><td>计算缺测率</td><td>6 / 72 ≈ 8.33%</td></tr><tr><td>3</td><td>返回交班草稿</td><td>结束，不再请求工具</td></tr></tbody></table><figcaption>数值为教学数据。模型发起计算请求，不等于原始记录已被验证。</figcaption></figure>
+<h3>Memory</h3>
+<p>“昨夜缺测率是多少”若当前工具结果自足，可以不查个人记忆；“和我上次认可的报告格式一致”则需要历史约定。读路径的门和写路径的巩固彼此独立，跳过一次检索不表示本轮对话不用保存。</p>
+<h3>Ops</h3>
+<p>Trace 将这次门控、各次迭代和工具参数关联到 Q31。确定性评测可检查设备 ID 与时间范围，主观评委可评价说明是否清楚。两份结果分别保留，不能让语言表达高分抵销工具读错设备的失败。</p>
+</section>
+
+<section id="harness"><h2>Harness：装配与网关</h2>
+<p><code>waku/app.py</code> 是理解启动装配的入口。配置、数据库连接、记忆、工具表、会话和追踪对象先构建好，再由 <code>Waku.respond()</code> 接受消息。CLI、Telegram、语音或 Dashboard 将输入转成文本，平台差异尽量停留在入口，不扩散到工具循环。</p><div class="code-label"><span>基于接线顺序的教学片段</span><button data-copy="code-turn" aria-label="复制请求接线">复制</button></div><pre role="region" tabindex="0" aria-label="请求接线"><code id="code-turn">收到文本：检查 B17 昨夜的记录
+  session.build_system(message)   → 本轮提示
+  recent history + message        → 消息序列
+  run_loop(...)                   → 回答与调用记录
+  session.add_exchange(...)       → 保存本轮交换
+  memory.maybe_consolidate()      → 判断是否到巩固时机
+  tracer.end_turn(...)            → 完成追踪记录</code></pre><p>这里每轮构建工作上下文，与 Hermes 的会话级冻结策略不同。默认单位被修改后，下一轮可能直接读取新值，实现较直观；代价是前缀更容易变化，无法默认推断供应商缓存仍有相同收益。应比较真实请求内容与缓存 usage，而非从“复用了 Session 对象”推断命中。</p><p>保存和巩固之间也有失败窗口。如果回答已经返回、chat_log 已写，而巩固调用失败，至少应能从未处理日志再次尝试。若保存失败却向用户承诺“我以后会记得”，就超出了已发生的状态变化。教材里的调用顺序可以帮助发现这种承诺与持久化的错位。</p>
+</section>
+
+<section id="loop"><h2>Loop：95 行循环</h2>
+<p>标题中的行数描述教学版本的规模，不是接口契约。更有用的是跟踪退出路径：模型给出无需工具的响应时自然结束，达到 <code>max_iterations</code> 时预算结束，外部错误或取消则走相应异常边界。</p><div class="code-label"><span>质检循环的伪代码</span><button data-copy="code-loop" aria-label="复制有界循环">复制</button></div><pre role="region" tabindex="0" aria-label="有界循环"><code id="code-loop">for iteration in range(max_iterations):
+    reply = model(current_messages, available_tools)
+    if not reply.tool_calls:
+        return final_text(reply)
+    for call in reply.tool_calls:
+        observation = dispatch(call)
+        append_paired_result(call.id, observation)
+return budget_exhausted_response()
+# 伪代码只说明控制流，不是 waku 的直接 API。</code></pre><p>一个回复可包含多个工具调用，教学实现逐个执行。若读取 B17 与 B18 都独立，也不能据此假定已经并行；并发需要另外处理结果配对、取消和访问共享资源。模型返回未知工具时，应产生明确错误，不能让名字相近的工具自动代替执行。</p><p><code>observer</code> 把 llm、tool、text 等事件送给外层。Dashboard 可以显示进度，Tracer 可以追加日志，流式输出还会产生文本增量。循环不必知道哪个订阅者在画界面，但订阅者异常是否被隔离仍取决于实现，不能从“使用 observer”直接推断永不影响主任务。Provider 适配在 <code>loop/models.py</code> 统一消息方言，换模型时仍需验证工具协议支持。</p>
+</section>
+
+<section id="memory"><h2>Memory：门与三支柱</h2>
+<p>语义、情节与程序性记忆适合回答不同问题。报告习惯是可持续事实，昨夜掉线是带时间的经历，怎样核对漂移是工作方法。它们一起进入上下文时应保留这种区别，不能把一次临时处置变成所有设备的永久规则。</p><table><thead><tr><th>类型</th><th>教学记录</th><th>读写边界</th></tr></thead><tbody><tr><td>Semantic</td><td>交班报告采用 UTC</td><td>更新时检查旧约定是否被明确替换</td></tr><tr><td>Episodic</td><td>06 月 12 日 B17 断链 40 分钟</td><td>保留发生时间与出处，不说设备现在仍断链</td></tr><tr><td>Procedural</td><td>缺测质检步骤的 SKILL.md</td><td>命中后加载操作知识，不因此获得写权限</td></tr></tbody></table><p>本地语义和情节数据可由 SQLite FTS5 搜索，可选向量后端承担另一种召回方式。关键词搜索有利于设备编号精确命中，语义检索适合自然语言相关问题，但两者都需要设备和用户范围过滤。每轮 system 构建发生读取，回合保存后才判断巩固，读取的新鲜度取决于之前写入何时成功。</p>
+</section>
+
+<section id="gate"><h2>检索门：先问要不要</h2>
+<p>检索门先判断当前请求是否依赖记忆，再决定是否访问存储。比如“计算 6/72”自带输入，查历史只增加噪声；“按我上次认可的口径算缺测率”隐含旧约定，需要检索。门返回是否检索、搜索词与理由，后两者让路由结果可追查。</p><div class="code-label"><span>新教学输入，不调用模型</span><button data-copy="code-gate" aria-label="复制门控样例">复制</button></div><pre role="region" tabindex="0" aria-label="门控样例"><code id="code-gate">自足计算：
+{"retrieve": false, "query": "", "reason": "输入已给出分子分母"}
+引用历史：
+{"retrieve": true, "query": "缺测率 统计口径 上次批准", "reason": "需要既有约定"}
+解析或调用失败：
+采用源码的 fail-open 路径，使用当前消息尝试检索。</code></pre><p>fail open 指门控失败后继续检索，不是绕过权限。它牺牲部分延迟和噪声控制以减少漏召回，不能笼统说陈旧信息总比没有信息安全。在浮标业务中，过期标定系数若被误用可能更糟，因此召回结果仍需带时间与来源。<sup><a class="note-ref" id="note-ref-1" href="#note-1" role="doc-noteref" aria-label="脚注 1：门是一个可优化的超参数">[1]</a></sup></p><p>还要检查门控模型输出 JSON 的能力。预算过小、推理内容挤占输出或格式不合规都会触发降级。监控可以分别记“模型判定 retrieve”和“门失败后 retrieve”，否则检索比例升高时很难判断是任务变化还是门正在故障。门本身一次额外调用的成本也应计入总延迟，短任务未必一定更省。</p>
+</section>
+
+<section id="consolidate"><h2>巩固：每 N 轮蒸馏</h2>
+<p>巩固把累积的对话提炼成可复用事实与事件，而非每个工具输出都直接写长期库。教学设定每 4 轮处理一次：前 3 轮先保存 chat_log，第 4 轮提取“默认 UTC”和“B17 当晚曾断链”，成功写入后标记对应日志已处理。这里的 4 是纸上配置，实际 N 以项目设置为准。</p><p>批处理让抽取器看到用户纠正。例如第一轮说“用本地时间”，第三轮明确改为 UTC，合并处理应保留最终有效约定及变更来源。它也带来延迟：尚未巩固的信息可能只能从近期对话读取，不能指望语义库已经更新。</p><p>一致性检查很重要。先标记 processed 再写事实，失败会丢更新；先写事实再标记而无幂等，重试可能生成重复。阅读 <code>consolidation.py</code> 时可重点追踪这两步是否处于事务或具备去重策略。蒸馏后的描述还应能回到原对话，便于用户纠错和删除，不能只留下无法解释的事实句。</p>
+</section>
+
+<section id="ops"><h2>Eval 与发布门禁</h2>
+<p>确定性评测检查结构化行为，LLM 评委判断语言层面的质量。前者可以断言读取范围是 UTC 的昨夜，后者可以判断说明是否解释了缺测与异常值的差别。分别运行、分别记账，才不会把模型的随机评分混入稳定的单元测试。</p><div class="code-label"><span>在 waku 项目目录中选择运行</span><button data-copy="code-ops" aria-label="复制分类评测命令">复制</button></div><pre role="region" tabindex="0" aria-label="分类评测命令"><code id="code-ops"># 先验证可重复的调用契约。
+uv run python -m pytest -q evals/deterministic/
+# 评委用例可能访问模型，单独核对运行条件。
+uv run python -m pytest -q evals/judge/
+# 汇总结果并用退出状态表达是否放行。
+uv run python -m waku.ops.release_gate</code></pre><p><code>release_gate</code> 汇总为 <code>.waku/eval_report.json</code>。判断放行时既看确定性是否全部满足，也看配置要求的 judge 阈值，不应把它描述成只有某一种检查有权阻断发布。<sup><a class="note-ref" id="note-ref-2" href="#note-2" role="doc-noteref" aria-label="脚注 2：确定性评测要覆盖工具调用">[2]</a></sup> 缺失报告、评委超时或测试未执行也应与“全部通过”区分，具体退出语义需读实现。</p><p>Trace 负责记录门、迭代和工具行为；报告解释失败；门禁据政策返回退出码。Dashboard 展示有助于人看过程，但界面看起来正常不能证明持久化、设备范围和缺测计算正确。升级提示或 Provider 后应重跑相同题集，保留旧报告以比较变化。</p>
+</section>
+
+<section id="path"><h2>阅读路径</h2>
+<p>阅读顺序按数据流安排：先确认状态落在哪里，再看请求如何流过循环，最后看记忆和评测怎样旁接。每次阅读都拿 Q31 这条任务作定位对象。</p><table><thead><tr><th>入口</th><th>要跟踪的值</th><th>完成这一步的标志</th></tr></thead><tbody><tr><td><code>config.py</code>、<code>app.py</code></td><td>数据库路径、模型配置、依赖对象</td><td>知道重启后从哪恢复记录</td></tr><tr><td><code>runtime/session.py</code></td><td>system 与历史窗口</td><td>能列出模型真正看到的材料</td></tr><tr><td><code>loop/agent.py</code>、工具表</td><td>调用 ID、迭代计数、退出原因</td><td>能区分自然结束和预算耗尽</td></tr><tr><td><code>memory/</code></td><td>门决策、命中记录、巩固标记</td><td>能解释新偏好何时可被召回</td></tr><tr><td><code>ops/</code> 与 <code>evals/</code></td><td>Trace 与评测报告关联</td><td>失败能够定位到结构或回答质量</td></tr></tbody></table><p><code>skills/</code> 用于助手的方法知识，<code>.claude/skills/</code> 中的贡献流程用于开发者工作。两类文件的受众和执行时机不同，不能把项目维护说明无条件塞进每次质检上下文。</p>
+</section>
+
+<section id="external"><h2>延伸对照：极简实现与生产系统之间</h2>
+<p>小型工程省略了许多产品能力，但仍可以借助对照检查设计是否自洽。读文献和完整产品时，以具体能力为单位比较，避免按代码行数比较可靠性。</p>
+<h3>记忆的研究脉络</h3>
+<p><a href="https://arxiv.org/abs/2304.03442">Generative Agents</a> 可用于观察事件记录怎样影响后续行为，<a href="https://arxiv.org/abs/2310.08560">MemGPT</a> 关注上下文容量与外部存储的调度。<a href="https://arxiv.org/abs/2504.19413">Mem0</a> 的事实整理与 <a href="https://arxiv.org/abs/2501.13956">Zep</a> 的时间关系可以启发不同测试：同一设备的旧事件不能覆盖新状态，同一用户的偏好也不能无边界跨组共享。waku 的门控属于是否读取的策略，巩固属于怎样写入的策略，二者不能互相替代。</p>
+<h3>极简与完整的取舍</h3>
+<table><thead><tr><th>选择</th><th>小系统的便利</th><th>规模扩大后的问题</th></tr></thead><tbody><tr><td>每轮现拼提示</td><td>新偏好生效路径容易理解</td><td>缓存与多会话视图需重新评估</td></tr><tr><td>本地 SQLite</td><td>便于备份、查询和删除</td><td>并发写、迁移和多机访问需规划</td></tr><tr><td>小型工具循环</td><td>容易逐步读懂</td><td>审批、后台任务和取消需要补接口</td></tr><tr><td>统一事件观察</td><td>界面和日志共用轨迹</td><td>监听失败和敏感数据传播需治理</td></tr></tbody></table><p>Hermes 与 waku 的选择可以相互解释，但不能把前者的某项能力默认算到后者头上。声称支持恢复或隔离时，要给出对应实现和测试。</p>
+<h3>可直接借鉴的四条</h3>
+<p>可以先复用事件接口而非复制 UI 逻辑，用结构化输出约束门控，以数据库记录而非模型口头承诺确认记忆写入，再让发布命令同时检查结构与质量。每项都需要失败样例：监听器抛错、门输出坏 JSON、巩固重试和 judge 不可用。只验证正常输入不足以证明这些边界有效。</p>
+</section>
+
+<section id="practice"><h2>动手验证</h2>
+<p>所有故障注入都应放在副本或 mock 依赖中，不修改真实凭据、不触碰正式观测库。</p>
+<h3>练习一：验证检索门</h3>
+<p>准备“算 6/72”和“按我上次认可的缺测口径计算”两条输入，预测门的不同决策。用 stub 模拟门控超时，确认其降级后仍执行用户范围过滤。记录 reason，不能只统计是否发生搜索。</p>
+<h3>练习二：跟一轮多工具迭代</h3>
+<p>给循环一个固定回复序列：读记录、算缺测率、返回说明。检查三次模型迭代与两次工具执行，并把上限设为 2，观察预算结束是否仍被界面标为完整成功。将未知工具名插入一次，确认错误能绑定正确调用。</p>
+<h3>练习三：给 waku 加一个工具</h3>
+<p>在练习副本新增一个只读工具，输入时槽总数与缺测数，返回缺测率。用总数 0、缺测数大于总数和正常的 6/72 做确定性测试。即使算式简单，也要拒绝无意义输入，不能让模型自行决定分母为零时的值。</p>
+<h3>练习四：让发布门拦一次</h3>
+<p>让一个确定性用例故意读取错误设备，运行发布门并核对非零退出与报告中的失败项。恢复后再跑同一题。若 judge 未运行，明确记作未测，而不是因为无分数就算达到阈值。</p>
+</section>
+
+<section id="recap"><h2>回顾与自测</h2>
+<p>对这个小助手，最值得检查的是三次转换：文本变成一次请求，对话变成长期事实，测试结果变成放行决定。每次转换都可能丢失身份、时间或失败信息。</p><details><summary>门控比直接检索多一次调用，什么时候仍值得？</summary><div><p>当大量请求不需要历史、检索较贵或无关召回明显干扰回答时可能有收益。应比较总延迟、漏召回与噪声，不能假定小模型一定免费。</p></div></details><details><summary>巩固周期到了，为什么还不能说已记住？</summary><div><p>达到周期只触发工作，抽取、写入和标记都需成功。报告应根据持久化状态，而不是根据调用开始来承诺。</p></div></details><details><summary>订阅了 observer 是否自动获得异常隔离？</summary><div><p>不会。还需核对调用方式、异常捕获和超时策略。接口解耦减少循环依赖，不等于订阅者错误不再存在。</p></div></details><p>接着可读 <a href="16.html">Pi 的 Core 与 Interactive</a>，比较另一个系统如何划分状态与循环。</p>
+</section>
+
+<section id="sources"><h2>源码与编写说明</h2>
+<p>机制入口来自快照 <code>d9e02cb</code> 中的 waku 源码与学习指南。本文 Q31、浮标记录和故障测试为新教学构造，未连接模型服务，也未执行发布门；列出的命令供读者在正确项目环境中选择运行。</p><ul class="source-list"><li><a href="../12-hermes-agent-small/README.md">12-hermes-agent-small/README.md</a></li><li><a href="../12-hermes-agent-small/learn_guide.md">learn_guide.md</a></li><li><a href="../12-hermes-agent-small/waku/loop/agent.py">waku/loop/agent.py</a></li><li><a href="../12-hermes-agent-small/waku/memory/retrieval_gate.py">waku/memory/retrieval_gate.py</a></li><li><a href="../12-hermes-agent-small/waku/app.py">waku/app.py</a></li><li><a href="../12-hermes-agent-small/waku/runtime/session.py">waku/runtime/session.py</a></li><li><a href="../12-hermes-agent-small/waku/ops/release_gate.py">waku/ops/release_gate.py</a></li><li><a href="../12-hermes-agent-small/evals/">evals/</a></li></ul><p>代码目录的相对链接用于追溯实现。单独传阅本页不影响阅读，执行练习时仍需项目依赖与隔离工作区。</p>
+</section>
+
+<section id="notes" class="footnotes" role="doc-endnotes"><h2>补充脚注</h2>
+<p>补充两项上线后需要继续量化的风险。</p><ol><li id="note-1"><p>门的误判有方向差异：漏掉标定历史可能影响结论，误检索则增加延迟并引入旧数据。可以给这两类错误分别标注损失，再决定默认降级与提示调整，而非只追求门控准确率一个数。 <a class="note-back" href="#note-ref-1" role="doc-backlink" aria-label="返回正文脚注 1">↩ 返回正文</a></p></li><li id="note-2"><p>工具正确性可以检查设备 ID、时间区间、允许参数和调用结果关系。回答评委另看解释质量，不能让一句写得很好的说明抵销越权读取。两类结果必须分别展示。 <a class="note-back" href="#note-ref-2" role="doc-backlink" aria-label="返回正文脚注 2">↩ 返回正文</a></p></li></ol>
+</section>
+</article><nav class="chapter-pager" aria-label="章节翻页"><a href="14.html">上一章 · Hermes 的运行时与记忆</a><a href="16.html">下一章 · Pi：Core 与 Interactive</a></nav>
+<footer class="book-footer"><span>AI 工程师：从原理到实践</span><span>第 15 章 · 完整章节</span></footer></main></div>
+<p id="notice" class="sr-only" role="status"></p></body></html>

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>测试与持续交付 · AI 工程师</title><link rel="stylesheet" href="reader.css">
+<script defer src="reader.js"></script>
+</head>
+<body><a class="skip" href="#main">跳到正文</a><header class="bar"><div class="bar-inner"><a class="brand" href="index.html">← 全书目录</a><div class="reader-tools" role="group" aria-label="阅读设置"><button data-size="-2" aria-label="减小字号">A−</button><span id="font-value" aria-live="polite">20px</span><button data-size="2" aria-label="增大字号">A＋</button><button class="print" data-print>打印 / PDF</button></div></div><div class="progress" aria-hidden="true"></div></header>
+<div class="reader-layout"><aside class="chapter-toc"><span class="part-label">本章导航</span><nav aria-label="本章目录"><a href="#why">把验证交给机器</a><a href="#diagram">CI、交付与部署</a><a href="#concepts">核心概念</a><a href="#pytest">pytest 与门禁分流</a><a href="#gitlab">GitLab CI 核心</a><a href="#pipeline">标准流水线</a><a href="#multigate">多门禁实战</a><a href="#features">特色知识点</a><a href="#troubleshoot">排查与优化</a><a href="#jenkins">Jenkins 与工具</a><a href="#external">延伸对照</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+<p>第三篇 / 第 12 章<br>建议阅读 36 分钟<br>练习另计</p><p>本章同时服务工程落地与面试准备，末尾附高频对比考点。</p></aside>
+<main id="main" class="reading"><article><header class="chapter-head"><span class="edition">第三篇 · 从单个 Agent 到可靠系统</span><h1>测试与持续交付</h1><p class="deck">把可调库存的修订交给持续集成验证：同一份代码在不同门禁下跑不同检查，只有通过验收的不可变制品才能进入审批与发布。</p><p class="meta">第 12 章 · 完整章节 · 先修：第 10 章 Harness、基本的 Git 与命令行</p></header>
+<details class="mobile-toc"><summary>本章目录 · 16 个小节</summary><nav aria-label="移动版本章目录"><a href="#why">把验证交给机器</a><a href="#diagram">CI、交付与部署</a><a href="#concepts">核心概念</a><a href="#pytest">pytest 与门禁分流</a><a href="#gitlab">GitLab CI 核心</a><a href="#pipeline">标准流水线</a><a href="#multigate">多门禁实战</a><a href="#features">特色知识点</a><a href="#troubleshoot">排查与优化</a><a href="#jenkins">Jenkins 与工具</a><a href="#external">延伸对照</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+</details>
+
+<aside class="lesson-note"><p>需要补充运行环境与巡检基础时，可查看 <a href="25.html#cicd">测试和运维推演</a>。</p></aside><section id="why"><h2>把验证交给机器</h2><p>助手改完库存计算，在本地看到测试通过，却可能漏装依赖、只测了一个函数，或在测试后又改了接口。团队需要在受控环境里重新运行验证，并将结果绑定到代码版本。持续集成提供这一共同检查入口，而非信任某个会话的口头回报。</p><p>本章继续使用 <code>movable=max(0,present-locked-reserve)</code> 的教学需求。快速门禁验证核心算术和接口契约，较慢的回归检查车型、站点数据与展示组合，发布前再检查最终制品。不同门禁可有重叠，关键是用风险与时延说明选择，不是把同一条命令复制四次。</p><p>CI 结果要反馈给 Agent 和评审者：哪条断言失败、用什么输入、期望和实际分别是什么、怎样复现。只有“Pipeline failed”无法指导修复。反过来，流水线绿色也只说明已定义的检查通过，测试盲区和权限风险仍需独立评审。</p><p>这里的 YAML 为新编教学配置，不修改仓库共享构建文件，不连接真实 GitLab 或 Jenkins，不执行部署。读者可在自己的隔离练习仓库中补齐测试和依赖。</p></section>
+
+<section id="diagram"><h2>CI、交付与部署</h2><p>先区分代码验证与发布决策。持续集成产出可追踪的检查结果，持续交付保持制品可发布，持续部署则在门禁后自动进入目标环境。采用哪一种取决于风险政策，不应以“多数企业怎样”代替自己的决定。</p><table><thead><tr><th scope="col">方式</th><th scope="col">自动到哪一步</th><th scope="col">本案例的人工边界</th></tr></thead><tbody><tr><td>CI</td><td>构建与测试</td><td>评审差异与业务风险</td></tr><tr><td>持续交付</td><td>产出可部署制品</td><td>批准生产切换</td></tr><tr><td>持续部署</td><td>满足门禁后自动切换</td><td>事前制定风险与回滚政策</td></tr></tbody></table><figure class="book-diagram" aria-label="公共自行车助手的状态与证据对照"><h3>触发与检查</h3><table><thead><tr><th scope="col">事件</th><th scope="col">检查内容</th><th scope="col">结果工件</th></tr></thead><tbody><tr><td>MR 更新</td><td>静态检查与库存快速测试</td><td>报告绑定 commit SHA</td></tr><tr><td>主干或定时任务</td><td>跨接口与显示的回归</td><td>完整回归记录</td></tr></tbody></table><h3>测试与产出</h3><table><thead><tr><th scope="col">制品阶段</th><th scope="col">输入</th><th scope="col">不可忽略的关系</th></tr></thead><tbody><tr><td>构建</td><td>已测试的源码版本</td><td>产物带哈希和依赖清单</td></tr><tr><td>发布验收</td><td>同一不可变产物</td><td>不能重新构建另一份再部署</td></tr><tr><td>归档</td><td>测试、扫描、审批回执</td><td>保留失败报告与版本关系</td></tr></tbody></table><figcaption>表中数据均为教学设定，用于追踪输入、状态与可核查结果。</figcaption></figure></section>
+
+<section id="concepts"><h2>核心概念</h2><p>Pipeline 是一次完整执行，Job 是可调度任务，Stage 是默认阶段屏障。GitLab 中具体 shell 命令通常写在 script 列表里，“Step”不是与所有平台完全一致的独立对象。Runner 执行 Job，Artifact 保存正式产物，Webhook 是事件通知机制之一。</p><p>对于库存功能，lint、test 和 build 可以是不同 Job。默认阶段规则让后续阶段等待前一阶段成功，needs 则声明明确依赖，使部分任务不必等待所有无关 Job。并行能否真正发生还取决于 Runner 容量和资源限制。</p><p>分支策略和 CI 相互影响，但没有唯一正确方案。小步合入有利于缩小回归定位范围，MR 门禁则需要仓库设置真正要求成功状态。仅在 YAML 写一个测试 Job，不代表合并按钮已经被政策阻断。DevOps 还涉及协作、反馈与运营责任，CI/CD 是其中一部分。</p></section>
+
+<section id="pytest"><h2>pytest 与门禁分流</h2><p>测试发现和选择决定门禁实际覆盖什么。pytest 默认寻找 test_*.py 或 *_test.py 等测试文件，再发现 test_ 函数与合规测试类；项目配置可以改变规则。marker 需要注册，开启 strict-markers 可防拼写错误导致误选。</p><table><thead><tr><th scope="col">门禁</th><th scope="col">建议覆盖</th><th scope="col">本案例的边界</th></tr></thead><tbody><tr><td>MR 快速</td><td>纯函数、关键接口</td><td>数量边界和字段契约</td></tr><tr><td>主干关键回归</td><td>接口到显示、数据映射</td><td>避免二次扣除</td></tr><tr><td>Daily</td><td>组合与较慢端到端</td><td>不同车型和空库存</td></tr><tr><td>Release</td><td>对最终包的验收</td><td>制品内容、启动与回滚兼容</td></tr></tbody></table><div class="code-label"><span>配置与命令说明，分开放入 pytest.ini 和终端；不是一个可整体运行的脚本</span><button data-copy="code-marker" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-marker"># pytest.ini 的教学配置
+[pytest]
+addopts = --strict-markers
+markers =
+    smoke: 库存关键路径快速检查
+    integration: 接口与展示组合检查
+    release: 最终制品验收
+
+# 终端命令，按所需门禁分别执行
+python -m pytest tests -m smoke --junitxml=reports/smoke.xml
+python -m pytest tests -m &quot;smoke or integration&quot; --junitxml=reports/main.xml
+python -m pytest tests --junitxml=reports/daily.xml</code></pre><p>marker 和目录筛选会同时生效。<code>pytest tests/smoke -m integration</code> 若目录内没有相应标记，可能没有收集到测试。pytest 无测试收集的退出码也非成功，应在门禁中保留，不能用 <code>|| true</code> 把它吞掉。</p><p>快速集应包含关键边界，例如在站 18、锁定 4、保留 3 得 11；在站 2、锁定 1、保留 3 得 0。Daily 不一定排除 smoke，完整回归常包含快速集。测试金字塔按测试层级划分，与 MR/Daily 这种运行时机划分是两个维度。</p></section>
+
+<section id="gitlab"><h2>GitLab CI 核心</h2><p>.gitlab-ci.yml 与业务代码一起版本化，Runner 按配置执行命令。共享与私有 Runner 的选择影响网络、隔离和凭证范围。Docker executor 提供较统一的工具环境，但若启用高权限或挂载宿主敏感目录，容器不能被当作充分安全边界。</p><table><thead><tr><th scope="col">关键字</th><th scope="col">作用</th><th scope="col">常见误读</th></tr></thead><tbody><tr><td>stages</td><td>定义默认阶段屏障</td><td>不保证每个阶段只有一个 Job</td></tr><tr><td>script</td><td>运行命令并使用退出码</td><td>输出 PASS 文本不等于退出 0</td></tr><tr><td>rules</td><td>按事件和条件纳入 Job</td><td>顺序会影响最终匹配</td></tr><tr><td>cache</td><td>复用依赖等可丢数据</td><td>不作为正式包传递契约</td></tr><tr><td>artifacts</td><td>保存报告和产物</td><td>应设置保留与访问政策</td></tr><tr><td>needs</td><td>明确依赖与可选产物传递</td><td>被依赖 Job 也要存在于当前流水线</td></tr></tbody></table><p>needs 可以缩短关键路径，但要与 rules 一起检查。如果 release Job 总是存在，而它依赖的 build Job 只在 MR 出现，tag 流水线可能配置无效。可按业务调整条件，必要时采用明确的 optional 依赖，但不能为了消除配置报错就让必须构建变成可选。</p><p>受保护变量和环境审批应由项目政策配置。来自不可信分支的流水线不应获得生产凭证，Agent 修改 YAML 也必须经过审查。</p></section>
+
+<section id="pipeline"><h2>标准流水线</h2><p>下面是仅验证与打包的最小教学流水线。练习仓库需提供 requirements-dev.txt、tests 和 bike_dispatch 包；不把这些路径描述成本仓库已有文件。此配置没有部署步骤。</p><div class="code-label"><span>GitLab CI 教学配置；依赖中应包含 pytest 和 build，镜像生产使用时应固定摘要</span><button data-copy="code-yml" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-yml">image: python:3.12-slim
+stages: [check, test, package]
+variables:
+  PIP_CACHE_DIR: &quot;$CI_PROJECT_DIR/.cache/pip&quot;
+cache:
+  key:
+    files: [requirements-dev.txt]
+  paths: [.cache/pip/]
+before_script:
+  - python -m pip install -r requirements-dev.txt
+
+syntax:
+  stage: check
+  script:
+    - python -m compileall -q bike_dispatch
+
+stock_tests:
+  stage: test
+  needs: [syntax]
+  script:
+    - mkdir -p reports
+    - python -m pytest tests --junitxml=reports/all.xml
+  artifacts:
+    when: always
+    reports:
+      junit: reports/all.xml
+    paths: [reports/]
+
+package:
+  stage: package
+  needs: [stock_tests]
+  script:
+    - python -m build
+  artifacts:
+    paths: [dist/]</code></pre><p>compileall 检查语法，不检查业务公式或类型。stock_tests 失败会阻止 package，when: always 则尽量保留已生成报告。若依赖安装阶段就失败，JUnit 文件不会凭空出现，需要看安装日志。</p><p>缓存依赖下载而不是整个虚拟环境，能减少环境路径和解释器变化造成的问题；缓存 miss 仍必须能完整构建。严格复现还需锁定依赖与镜像摘要。构建出的 wheel 或镜像应绑定提交与内容哈希，后续环境部署同一产物，不能每个环境重新拉依赖构建。</p></section>
+
+<section id="multigate"><h2>多门禁实战</h2><p>多门禁要先定义事件，再确定检查集合。下面片段展示 MR、定时与 tag 的选择，不包含完整的安装和制品验收环境，需要与公共配置合并。</p><div class="code-label"><span>触发条件片段：实际发布测试应安装并检查指定不可变制品，另配报告归档</span><button data-copy="code-gates" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-gates">workflow:
+  rules:
+    - if: &#x27;$CI_PIPELINE_SOURCE == &quot;merge_request_event&quot;&#x27;
+    - if: &#x27;$CI_PIPELINE_SOURCE == &quot;schedule&quot;&#x27;
+    - if: &#x27;$CI_COMMIT_TAG&#x27;
+    - if: &#x27;$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH&#x27;
+
+mr_inventory:
+  rules:
+    - if: &#x27;$CI_PIPELINE_SOURCE == &quot;merge_request_event&quot;&#x27;
+  script:
+    - python -m pytest tests -m smoke --junitxml=reports/mr.xml
+
+nightly_inventory:
+  rules:
+    - if: &#x27;$CI_PIPELINE_SOURCE == &quot;schedule&quot;&#x27;
+  script:
+    - python -m pytest tests --junitxml=reports/nightly.xml
+
+tag_acceptance:
+  rules:
+    - if: &#x27;$CI_COMMIT_TAG&#x27;
+  script:
+    - python -m pytest tests -m release --junitxml=reports/release.xml</code></pre><p>主干关键回归可以增加单独 Job，覆盖接口与显示组合。构造事件矩阵检查哪些 Job 被纳入，防止 push 与 MR 同时创建重复流水线，也防止 tag 因错误 rules 跳过验收。</p><p>断言失败让 pytest 返回非零，Runner 将 Job 标记失败，是否阻止 MR 还取决于项目合并政策和 allow_failure 配置。<sup><a class="note-ref" id="note-ref-2" href="#note-2" role="doc-noteref" aria-label="脚注 2：测试失败信息是给 Agent 用的接口">[2]</a></sup> 若脚本通过管道交给 tee，应检查 shell 是否传播前段失败，不能只拿最后一个命令的退出码。</p></section>
+
+<section id="features"><h2>特色知识点</h2><p>优化先看关键路径，再看缓存命中和 Runner 等待。拆并行 Job 可以缩短测试时间，但会重复安装依赖并增加资源消耗。可共享构建镜像或依赖缓存，仍需保证缓存丢失不影响正确性。</p><p>正式产物用提交与内容摘要标识。latest 可作为方便的别名，但不能作为唯一审计依据，也不应在回滚时只凭它寻找历史包。发布记录保存源码、依赖、产物、验证和审批的对应关系。</p><p>流水线变更影响所有后续验收，应像代码一样评审。紧急发布可有受控例外，不能静默删除检查。<sup><a class="note-ref" id="note-ref-1" href="#note-1" role="doc-noteref" aria-label="脚注 1：门禁要有例外流程">[1]</a></sup> 交叉编译或特定硬件测试涉及额外工具链，本章库存 Web 服务案例不需要加入这些复杂度。</p><table><thead><tr><th scope="col">数据类型</th><th scope="col">丢失后影响</th><th scope="col">正确用途</th></tr></thead><tbody><tr><td>Cache</td><td>重装依赖、构建变慢</td><td>可重建的加速数据</td></tr><tr><td>Artifacts</td><td>证据或包无法交接</td><td>报告、正式构建产物</td></tr><tr><td>制品仓库</td><td>长期发布和回滚受影响</td><td>受权限与保留政策管理的版本产物</td></tr></tbody></table></section>
+
+<section id="troubleshoot"><h2>排查与优化</h2><p>先确认任务有没有被创建，再看谁在执行和失败在哪一层。不要在没有流水线记录时直接修改库存业务函数。</p><table><thead><tr><th scope="col">层</th><th scope="col">检查对象</th><th scope="col">可观察证据</th></tr></thead><tbody><tr><td>事件与选择</td><td>MR、schedule、tag 及 rules</td><td>流水线列表、事件变量、配置校验</td></tr><tr><td>调度</td><td>Runner 标签、在线状态与容量</td><td>pending 原因、排队时间</td></tr><tr><td>环境</td><td>镜像、依赖、工作目录</td><td>安装日志、解释器与路径</td></tr><tr><td>测试</td><td>收集、marker、断言</td><td>用例数、失败栈、JUnit</td></tr><tr><td>外部资源</td><td>规程库、制品库、网络</td><td>超时类型与服务状态</td></tr><tr><td>凭证范围</td><td>保护规则和有效性</td><td>权限拒绝码，不打印秘密值</td></tr></tbody></table><p>优化时区分等待、安装、执行和归档。若总耗时大半在 Runner 排队，增加 pytest 并行没有解决主要问题；若单个测试等待外部服务，应使用可控替身或专用集成环境。</p><p>只对明确的基础设施临时故障重试，并保存第一次失败。稳定断言失败不应靠自动重跑变绿。超时上限也要按 Job 和整条流水线分别设置，取消时确认测试子进程与外部资源得到清理。</p></section>
+
+<section id="jenkins"><h2>Jenkins 与工具</h2><p>Jenkins 采用 controller 与 agent 分工，Jenkinsfile 可以用声明式 Pipeline 描述阶段与命令。与 GitLab CI 一样，关键问题是执行环境、凭证范围、产物和失败传播，而非只记语法名称。</p><p>pytest 运行行为测试，静态分析工具检查部分代码质量，制品仓库保存版本包，Docker 提供可复用环境。工具组合不能替代业务验收：扫描器未报错，不代表 reserve 被正确扣除。选择时优先接现有平台，不为本案例再搭第二套 CI。</p><p>若将 Agent 接到 Jenkins 或 GitLab 日志，给它只读、限定任务范围的访问。允许它提交修复分支，不等于允许它修改保护策略、导出凭证或关闭失败门禁。</p></section>
+
+<section id="external"><h2>延伸对照：持续交付的成熟体系</h2><p>持续交付体系提供了可靠验证与产物追踪的基础。Agent 参与修改以后，新增的是非确定候选的生成方式，已有的分层测试与审批仍然适用。</p><h3>从持续集成到部署流水线</h3><p>Fowler 的持续集成写作强调频繁集成并自动验证，Continuous Delivery 讨论从提交到发布的部署流水线。对库存功能，较小改动有助于把失败定位到函数、接口或显示；一次重写整个调度模块则会放大评审和回滚难度。</p><h3>度量：DORA</h3><p>DORA 的经典度量包括部署频率、变更前置时间、变更失败率和恢复相关指标，具体名称与口径应随所采用版本注明。它们用于观察交付速度与稳定性，不是某次测试的成功分数，也不能仅靠一条 YAML 就自动改善。</p><p>可以记录库存修订从提出到验证的时间、发布后是否回滚以及恢复用时，但要区分等待审批、排队和真正执行。更频繁发布若同时提高故障率，需要回查门禁与变更粒度。</p><h3>测试金字塔与分支策略</h3><table><thead><tr><th scope="col">实践维度</th><th scope="col">如何用于本案例</th><th scope="col">常见混淆</th></tr></thead><tbody><tr><td>测试层级</td><td>函数、接口、端到端</td><td>不等同 MR、Daily 时间划分</td></tr><tr><td>分支协作</td><td>小步 MR 与明确合并政策</td><td>分支名本身不提供门禁</td></tr><tr><td>制品流转</td><td>同一包经验证后发布</td><td>不是每个环境重新打包</td></tr><tr><td>反馈回路</td><td>失败证据进入 Agent 下一轮</td><td>不允许 Agent 修改标准来过关</td></tr></tbody></table><p>参考：<a href="https://martinfowler.com/articles/continuousIntegration.html">持续集成</a>、<a href="https://continuousdelivery.com/">Continuous Delivery</a>、<a href="https://dora.dev/">DORA</a>、<a href="https://docs.gitlab.com/ee/ci/">GitLab CI</a>、<a href="https://docs.pytest.org/">pytest</a>。</p></section>
+
+<section id="practice"><h2>动手验证</h2><p>先在隔离练习目录执行本地测试，再用平台配置校验工具检查 YAML。不要把本页片段未经补齐直接当作生产发布配置。</p><h3>练习一：本地跑通多门禁</h3><p>编写包含 18、4、3 与 2、1、3 的测试，并分别标记 smoke 与 integration。用 --collect-only 检查选中了哪些用例，再运行 marker 命令。故意拼错 marker，确认 strict-markers 报错；用一个不存在的筛选条件，确认零用例不会被记录成验证通过。</p><h3>练习二：读懂并改写 yml</h3><p>为 MR、主干 push、schedule 和 tag 画四行事件矩阵，标注应出现的 Job 和依赖。逐条核对 rules，检查是否有不存在的 needs。把 stock_tests 设置失败，预期 package 不执行而失败报告仍归档。平台未运行时，只能称配置推演，不能声称已有绿色流水线。</p><h3>练习三：本地模拟流水线</h3><p>本地按语法检查、测试、打包三步顺序运行，故意让测试失败，确认脚本停止而不产出新的正式包。记录每步命令、返回码和候选摘要。若使用仓库 mini-pipeline 模拟器，先读其支持的参数与阶段，不能将模拟输出当作真实 GitLab Runner 行为。</p><h3>练习四：写一条故障排查记录</h3><p>推演一条故障：MR 处于 pending，没有 pytest 日志。先查 Runner 标签与可用性，再查容量；只有 Job 真正启动且到达测试命令后，才调查断言。另一条故障是零用例退出，检查目录、marker 与发现规则。给每项写证据和下一检查，不填未经观察的结论。</p></section>
+
+<section id="recap"><h2>回顾与自测</h2><p>CI 将同一版本的检查变成团队可复核的记录，交付则要求产物、证据和审批一致。Agent 可以依据失败修复代码，但不应自行降低成功标准。</p><details><summary>绿色流水线自动等于 MR 不能绕过吗？</summary><div><p>不等于。合并保护、允许失败、手动例外和权限配置共同决定门禁，必须独立核对项目政策。</p></div></details><details><summary>Daily 是否应排除 MR 的 smoke 用例？</summary><div><p>没有这种要求。完整回归常包含快速集，两者可能重叠；要按风险与耗时定义集合，不把运行时机误当测试层级。</p></div></details><details><summary>Cache 可否保存唯一正式包？</summary><div><p>不应。缓存可丢且缺少可靠交付语义，正式包需要制品与内容标识，并保留相应验证回执。</p></div></details><p><a class="button" href="13.html">继续阅读：理解模型实现</a></p></section>
+
+<section id="sources"><h2>源码与编写说明</h2><p>本页保留 d9e02cb 中测试与 CI 教材入口，全部案例、配置和表格重新编写。本次未运行 GitLab、Jenkins 或部署；YAML 明确区分完整教学骨架与需合并的片段，不改本书构建脚本。</p><ul class="source-list"><li><a href="../10-CICD/cicd学习大纲.md">cicd学习大纲.md</a>。用于对照测试、触发与发布的学习范围。</li><li><a href="../10-CICD/02-pytest/README.md">02-pytest/README.md</a>。查看测试发现、参数化与 marker 的独立演示。</li><li><a href="../10-CICD/03-gitlab-ci/README.md">03-gitlab-ci/README.md</a>、<a href="../10-CICD/03-gitlab-ci/02-必须掌握语法.md">02-必须掌握语法.md</a>、<a href="../10-CICD/03-gitlab-ci/04-与pytest衔接.md">04-与pytest衔接.md</a>。定位配置语法与测试命令如何连接。</li><li><a href="../10-CICD/03-gitlab-ci/demos/mini-pipeline/.gitlab-ci.yml.example">demos/mini-pipeline/.gitlab-ci.yml.example</a>。可比较原示例的公共配置、报告与依赖关系。</li><li><a href="../10-CICD/05-troubleshoot/README.md">05-troubleshoot/README.md</a>、<a href="../10-CICD/06-jenkins/README.md">06-jenkins/README.md</a>、<a href="../10-CICD/07-tools/README.md">07-tools/README.md</a>。从故障排查、执行平台与工具职责继续查阅。</li></ul><p>本页可以离线阅读与复制代码。打开源码链接时，需要让 ebook 与原仓库保持相对位置；在线资料和模型下载另需网络。</p></section>
+
+<section id="notes" class="footnotes" role="doc-endnotes"><h2>补充脚注</h2><p>这两条注释补足正文的操作边界。它们描述设计要求，不代表链接的演示程序已经具备相应保障。</p><ol><li id="note-1"><p>紧急例外需要独立授权、明确范围、过期时间和补验安排。保留被跳过的检查及理由，发布后补跑并复盘；不能把临时例外永久写成 allow_failure 或删除门禁。 <a class="note-back" href="#note-ref-1" role="doc-backlink" aria-label="返回正文脚注 1">↩ 返回正文</a></p></li><li id="note-2"><p>失败日志是自动修复的输入接口。保留测试 ID、输入、期望、实际、返回码和复现命令，同时去除凭证与个人数据。JUnit 帮助结构化定位，但不能替代完整环境信息。 <a class="note-back" href="#note-ref-2" role="doc-backlink" aria-label="返回正文脚注 2">↩ 返回正文</a></p></li></ol></section>
+</article><nav class="chapter-pager" aria-label="章节翻页"><a href="11.html">上一章 · Loop Engineering</a><a href="13.html">下一章 · 从零实现大语言模型</a></nav>
+<footer class="book-footer"><span>AI 工程师：从原理到实践</span><span>第 12 章 · 完整章节</span></footer></main></div>
+<p id="notice" class="sr-only" role="status"></p></body></html>

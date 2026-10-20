@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>DeepSeek Harness 与边缘 Agent · AI 工程师</title><link rel="stylesheet" href="reader.css">
+<script defer src="reader.js"></script>
+</head>
+<body><a class="skip" href="#main">跳到正文</a><header class="bar"><div class="bar-inner"><a class="brand" href="index.html">← 全书目录</a><div class="reader-tools" role="group" aria-label="阅读设置"><button data-size="-2" aria-label="减小字号">A−</button><span id="font-value" aria-live="polite">20px</span><button data-size="2" aria-label="增大字号">A＋</button><button class="print" data-print>打印 / PDF</button></div></div><div class="progress" aria-hidden="true"></div></header>
+<div class="reader-layout"><aside class="chapter-toc"><span class="part-label">本章导航</span><nav aria-label="本章目录"><a href="#why">两个前沿方向</a><a href="#loop">所有 Harness 共用的循环</a><a href="#blocks">Coding Agent 的四块</a><a href="#config">代码 vs 配置</a><a href="#toolskill">Tool 与 Skill 不是一回事</a><a href="#self">能改自己的 Agent</a><a href="#edge">端侧 Agent 是什么</a><a href="#edge-run">端侧运行时与一轮</a><a href="#gate">工具门：默认不出域</a><a href="#safety">安全：可预期比聪明更重要</a><a href="#learn">学端侧要补什么</a><a href="#external">延伸对照</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav><p>海洋浮标观测与数据质检助手</p><p>先检查证据和状态，再判断输出是否足以交付。练习可用纸笔完成，服务调用需自行配置。</p></aside>
+<main id="main" class="reading"><article><header class="chapter-head"><span class="edition">第五篇 · 综合项目与延伸阅读</span><h1>DeepSeek Harness 与边缘 Agent</h1><p class="deck">近海工作站既要调整助手能力，也要在断网时完成质检。把可变配置和本地执行分别拆开，检查更新、资源与出域的真实边界。</p><p class="meta">第 18 篇阅读材料 · 海洋观测教学场景 · 数值推演与源码说明分开标注</p></header>
+<details class="mobile-toc"><summary>本章目录 · 16 个小节</summary><nav aria-label="移动版本章目录"><a href="#why">两个前沿方向</a><a href="#loop">所有 Harness 共用的循环</a><a href="#blocks">Coding Agent 的四块</a><a href="#config">代码 vs 配置</a><a href="#toolskill">Tool 与 Skill 不是一回事</a><a href="#self">能改自己的 Agent</a><a href="#edge">端侧 Agent 是什么</a><a href="#edge-run">端侧运行时与一轮</a><a href="#gate">工具门：默认不出域</a><a href="#safety">安全</a><a href="#learn">学端侧要补什么</a><a href="#external">延伸对照</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+</details>
+
+<section id="why"><h2>两个前沿方向</h2>
+<p>海上作业船的工作站白天连接岸站，夜里可能只有间歇网络。工程师希望为助手临时增加一个只读诊断工具，又不希望原始报文被顺手上传。这是两类不同问题：运行时怎样采用新的能力定义，数据与动作在哪里发生。即使模型都在本机，新增工具也可能调用公网。</p><p><code>14-deepseek-harness/</code> 的材料讨论可配置、可替换的 Harness，<code>15-Edge-Agent/</code> 讨论端侧闭环。本章把它们用于一个新的教学任务：检查 B17 波高突变，生成本地草稿，在获准后只发送摘要。两个目录的架构讨论不能当作已经交付并经过设备测试的完整产品。</p><p>配置化扩大可调整范围，本地化缩小默认数据边界，两者都需要独立的验证层。若助手能修改工具白名单和验证规则，就可能把原先的保护一并改掉；若端侧推理失败自动回退云端，也会改变数据流。部署位置与更新策略都应能被审计。</p>
+</section>
+
+<section id="loop"><h2>所有 Harness 共用的循环</h2>
+<p>一次质检请求可以经历读取、计算和解释多次模型调用。第一步模型请求读取 06:00 至 07:00 的报文，宿主执行后回填观察；第二步模型根据结果请求差值统计；第三步形成草稿。每次模型调用都是一次新的请求，宿主负责发送相应历史与上下文，不能期待模型在未收到记录时自行记得上一步。</p><p>材料用 Step 表示一次推进，Turn 表示一条用户输入的完整循环。术语随系统不同，但计账必须明确：上面的教学轨迹有三次模型决策、两次工具执行，不是“整条消息只有一次 API 调用”。本地编排决定何时发出调用，模型与工具各自产生计算或网络开销。</p><p>模型能力、工具质量、证据和预算共同影响结果。增加循环次数有时能补齐证据，也可能重复错误查询，不能说只要让环转更久就会更聪明。可用停机条件应包括无需新工具、证据不足、预算耗尽、用户取消以及不可恢复故障，最终报告须区分这些原因。</p>
+</section>
+
+<section id="blocks"><h2>Coding Agent 的四块</h2>
+<p>把助手拆为四块，可以为每次决策保存一份配置清单。这样修改工具后，能知道下一步究竟采用了哪个版本。</p>
+<h3>模型</h3>
+<figure class="book-diagram" aria-label="模型配置记录"><table><thead><tr><th>字段</th><th>教学值</th><th>校验</th></tr></thead><tbody><tr><td>模型选择</td><td>本地指令模型 A</td><td>支持所需工具协议</td></tr><tr><td>输入预算</td><td>只取相关时段与手册段落</td><td>为输出和工具结果留余量</td></tr><tr><td>回退策略</td><td>离线时只返回本地证据</td><td>不默认上传上下文</td></tr></tbody></table><figcaption>模型是可选部件，但替换必须维持调用协议和数据政策。</figcaption></figure>
+<h3>工具注册表</h3>
+<p>工具表列出读取报文、计算统计和保存草稿。每个工具都有实际实现、参数约束和权限；仅把一个名字加入 schema 还不具备执行能力。记录工具表版本后，才可解释“为什么上一步没有诊断工具，下一步却能调用”。</p>
+<h3>Prompt 组装</h3>
+<p>提示组装把身份、项目约定、工具说明和当前证据组合起来。教学约定“原始报文只读”应同时被工具权限落实。工具变化时提示中的能力清单也需更新，否则模型仍可能请求已移除的名字，或不知道新能力存在。</p>
+<h3>Session</h3>
+<figure class="book-diagram" aria-label="会话外部状态分界"><pre>会话内：用户输入、模型响应、工具观察、配置版本
+会话外：CSV 文件、后台进程、已投递摘要、设备设置
+恢复会话 ≠ 撤回会话外动作</pre><figcaption>四块分工让状态可追查，但不会天然组成跨系统事务。</figcaption></figure>
+</section>
+
+<section id="config"><h2>代码 vs 配置</h2>
+<p>配置化把模型选择、提示和可用能力从固定分支中外置，宿主在规定的重建边界读取它们。若下一步重新组装 Agent，变更可能在下一步生效；若只在启动时读取，则仍需重载。关键是读配置的实际时机，不是文件扩展名叫 YAML 还是 JSON。</p><p>比如把工具表从 V3 改到 V4，增加只读 <code>inspect_flags</code>。应先校验名称、schema、实现位置和权限，再把 V4 发布为当前版本。正在执行的 V3 调用不宜被中途换实现，否则同一个调用的参数和输出可能不再匹配。可采用每个 step 固定一份清单，下一步再原子切换。</p><p>代码同样可以动态加载，配置也可能加载可执行插件，所以“代码必须重编译、配置改动零成本”过于绝对。配置需要验证、授权、错误恢复和测试，只是可能省去完整打包部署。将 loop 作为可替换组件时，还需约定事件、队列、工具结果与终止语义，不能仅保持同名入口。</p><div class="lesson-note"><p>材料中的现场演示记录了中途增添工具的体验，那是来源描述，不是本次实测。复现时应检查下一步的工具清单与实际调用，而非只看模型说“新工具已安装”。</p></div><p>SDK 嵌入与 Web 门户属于不同外壳，均可使用同一配置系统；是否立即生效、是否安全，仍取决于宿主如何加载和验证。配置损坏时应保留上一份有效版本，不能半套新 schema 搭配半套旧实现继续工作。</p>
+</section>
+
+<section id="toolskill"><h2>Tool 与 Skill 不是一回事</h2>
+<p>Tool 把某项操作暴露为有参数和结果的程序能力，Skill 描述如何组织多步工作。二者可能一起使用：质检技能指导先看缺测、再核对突变，实际数值由读取和计算工具产生。模型自己写出一个数字不等于已经测量。</p><table><thead><tr><th>能力</th><th>适合的形式</th><th>结果验收</th></tr></thead><tbody><tr><td>统计 36 个时槽中 3 个空值</td><td>有输入校验的计算工具</td><td>缺测率 3/36≈8.33%，保留分子分母</td></tr><tr><td>调查波高异常的步骤</td><td>可按情况分支的技能</td><td>候选原因与证据对应，未知项显式保留</td></tr><tr><td>外发摘要</td><td>受审批与目标限制的工具</td><td>审批、幂等结果及投递状态</td></tr></tbody></table><p>工具不一定没有不确定性，远端 API 也会失败；技能也可以有很固定的流程。选择时看需要封装的契约：精确数值、权限和副作用应由程序边界负责，多步判断可由技能组织。不要用技能文字替代发送工具的授权检查。</p><p>读取工具应返回单位与时间，计算工具说明是否忽略空值，保存工具返回实际路径。若工具只回“成功”，模型便难以判断处理的是哪批数据。设计良好输出可以减少后续猜测，比把所有操作都变成自由 shell 更容易验证。</p>
+</section>
+
+<section id="self"><h2>能改自己的 Agent</h2>
+<p>让助手提出运行配置修改，可以缩短能力调整反馈。它发现现有工具无法区分异常码，生成一个新只读工具建议，测试通过后由宿主加载，这是可控扩展。若允许它同时降低测试要求、修改审批白名单并宣告通过，就失去独立验证。</p><p>可以把变更分成提案、沙箱验证、授权、激活和回滚五种状态。提案保存修改内容与理由，验证使用固定假报文，激活记录旧新版本；超范围的文件、网络或权限变化转人工。<sup><a class="note-ref" id="note-ref-1" href="#note-1" role="doc-noteref" aria-label="脚注 1：自改写的安全边界">[1]</a></sup> 这里是加固设计，并非材料已经实现的安全机制。</p><p>自改写 loop 还会改变轨迹怎样被记录。验证器必须在可改写区域之外，至少能检查工具结果配对、预算终止、取消传播与审计连续性。否则一个新 loop 可能通过不再记录失败来“提高成功率”。学习这个方向时，应先让助手只改无副作用的配置，再逐项扩大范围，不能默认放开所有运行时文件。</p>
+</section>
+
+<section id="edge"><h2>端侧 Agent 是什么</h2>
+<p>端侧 Agent 在数据产生处完成推理、取证和动作。对于船载工作站，原始浮标报文、维护手册和本地草稿都留在同一可信域内，网络断开后仍能生成有边界的质检说明。它与只做一次分类的 Edge AI 不同，因为它还会多步调用工具与维护任务状态。</p><table><thead><tr><th>形态</th><th>在本地完成的内容</th><th>剩余依赖</th></tr></thead><tbody><tr><td>传感器分类器</td><td>判定单段波形是否可疑</td><td>上层决定如何处理</td></tr><tr><td>云端助手</td><td>可能只做采集与界面</td><td>上传上下文、远端模型与工具</td></tr><tr><td>端侧助手</td><td>本地推理、检索和受限工具循环</td><td>可选授权后的摘要投递</td></tr></tbody></table><p>本地化可能降低网络往返与带宽需求，但小设备的推理速度也可能更慢。是否可行要看模型大小、内存带宽、上下文和工具预算，不可仅因使用 NPU 就承诺低延迟。隐私同样需要检查工具、遥测与 fallback，模型权重在本机并不能保证其他组件不联网。</p><p>可靠做法是列出数据流：原始报文只供本机读取，派生统计允许本地存储，摘要在批准后外发，日志默认脱敏。离线时不能把旧缓存伪装为最新远端资料，报告应写清观测与资料的有效时间。</p>
+</section>
+
+<section id="edge-run"><h2>端侧运行时与一轮</h2>
+<p>端侧的一轮任务还要受设备状态影响。内存不足、电源紧张或散热受限时，系统应减少工作或停止，而不是为了完成一段解释让采集服务失去资源。</p>
+<h3>UI</h3>
+<figure class="book-diagram" aria-label="界面状态与用户决定"><table><thead><tr><th>显示状态</th><th>用户可做的事</th><th>不得暗示</th></tr></thead><tbody><tr><td>分析中</td><td>取消或补充范围</td><td>尚未完成的报告可发布</td></tr><tr><td>本地草稿已保存</td><td>查看依据</td><td>已投递岸站</td></tr><tr><td>请求外发</td><td>批准指定摘要与目标</td><td>批准所有未来网络请求</td></tr></tbody></table><figcaption>UI 用状态区分本地完成与远端交付，避免断网时制造假成功。</figcaption></figure>
+<h3>Agent</h3>
+<p>Agent 先装配本地相关片段，判断需要的工具，再依据观察继续。教学预算可设最多 4 次决策、最多读取 200 条报文；达到上限就返回当前可证实结论及未完成项。具体电量和温度阈值需设备工程师定义，不能由语言模型临场决定。</p>
+<h3>本机运行时</h3>
+<p>本机运行时包含量化模型、检索索引、记忆和设备工具。4-bit 权重可减少存储，但仍需量化元数据、KV 缓存、激活和运行时空间。llama.cpp、MLX、Core ML、QNN、ExecuTorch 面向不同平台和后端，不能统一称为都能直接吃满 NPU。算子支持与落到 CPU 的回退需要实测。</p><p>感知小模型可以先给出异常候选，语言模型再组织解释。采集和安全控制应保有独立优先级，不能因语言循环阻塞停止报文接收；本地数据库与文件写入也要处理掉电恢复。</p>
+</section>
+
+<section id="gate"><h2>工具门：默认不出域</h2>
+<p>出域判断应放在能够看到实际目标与载荷的执行边界。模型请求“发给岸站”时，程序应知道具体主机、数据字段、审批和凭据范围，而非只搜索命令文本有没有“upload”。</p><div class="code-label"><span>工具门的教学判定顺序</span><button data-copy="code-gate" aria-label="复制本地执行门">复制</button></div><pre role="region" tabindex="0" aria-label="本地执行门"><code id="code-gate">收到工具请求
+  1. 校验工具与参数，拒绝未知能力
+  2. 核对设备、路径和目标是否在允许范围
+  3. 若有出域，检查当前载荷与目标的显式授权
+  4. 若会改变设备或删除数据，进入独立高风险审批
+  5. 执行并记录实际结果
+拒绝 / 超时 / 取消均不得标为执行成功。</code></pre><p>白名单可以只包含报文只读、手册检索、统计和草稿保存。摘要投递是单独能力，限制字段与固定岸站目标；它不授权上传原始波形。DNS、重定向、子进程或外部脚本也可能形成网络路径，严格不出域需要网络策略配合，提示词和工具名称检查不够。</p><p>日志、崩溃上报和依赖遥测也应列入数据流检查。用假数据进行断网试验时，可以检查应用是否继续运行、是否尝试云端回退以及用户看到什么失败说明。没有网络测试证据，不能把默认不出域写成已经证明的隐私保证。</p>
+</section>
+
+<section id="safety"><h2>安全：可预期比聪明更重要</h2>
+<p>安全关键动作应与语言解释解耦。助手可以解释候选维护步骤，但不应凭生成文本直接改变浮标采样频率、固件或电源设置。即使操作者同意，工具仍要检查设备允许范围和当前状态。</p><table><thead><tr><th>风险</th><th>程序控制</th><th>失败时的可接受行为</th></tr></thead><tbody><tr><td>把缺测补成真实值</td><td>区分 observed 与 estimated 字段，发布规则拒绝混写</td><td>保留空值和缺证据说明</td></tr><tr><td>修改设备配置</td><td>允许值、版本与人工审批</td><td>拒绝执行，仍可生成只读诊断</td></tr><tr><td>资源抢占采集服务</td><td>内存、时间和进程优先级预算</td><td>停止语言分析，继续采集</td></tr><tr><td>误外发原始记录</td><td>目标与字段白名单、网络限制</td><td>本地保存待审摘要</td></tr></tbody></table><p>“策略内才动”需要能执行的约束，比如只读挂载、明确路径与字段过滤。语言模型估计自己很有把握并不是放行信号。对于超出支持设备、报文损坏或时间错乱的输入，允许返回无法判断，比在所有输入上硬给结论更符合质检任务。</p><p>人工确认也不能替代工程限值。操作者误点批准时，工具仍应拒绝非法采样周期或错误固件型号。所有保护都需要相应反例测试，不能只检查正常操作下没有出错。</p>
+</section>
+
+<section id="learn"><h2>学端侧要补什么</h2>
+<p>学习顺序可以按故障可定位性安排：先用固定假模型跑通循环，再接本地模型；先只读工具，再加出域和高风险动作；最后测整机资源。这样每次增加一个不确定因素，出现故障时更容易知道来自哪里。</p><div class="code-label"><span>岸站工作站的验证顺序</span><button data-copy="code-learn" aria-label="复制端侧验证顺序">复制</button></div><pre role="region" tabindex="0" aria-label="端侧验证顺序"><code id="code-learn">固定回复序列：验证工具结果配对与预算停止
+本地推理：验证格式、工具协议与长输入
+只读工具：验证路径、设备与空值语义
+出域门：用假目标验证拒绝、批准和取消
+资源试验：记录内存峰值、热状态与采集延迟
+整机验收：断网 / 掉电恢复 / 长时运行</code></pre><p>已有云端经验可以复用消息、工具和评测思想，但设备后端的算子与内存行为必须补测；只会运行模型文件也不足以实现受控工具循环。<sup><a class="note-ref" id="note-ref-2" href="#note-2" role="doc-noteref" aria-label="脚注 2：端侧评测要看最坏情况">[2]</a></sup> 报告中分别写“纸上预算”“目标设备测量”“待验证项目”，不要用笔记中的理想数值填实测栏。</p>
+</section>
+
+<section id="external"><h2>延伸对照：两个方向的公共背景</h2>
+<p>插件化与端侧推理都有成熟技术可参考，参考时要把连接能力和安全保证分开。</p>
+<h3>插件化与可配置架构</h3>
+<p>插件架构把变化放在稳定接口后面，可替换 loop 则进一步要求一致的事件和状态语义。<a href="https://modelcontextprotocol.io/">MCP</a> 统一部分工具连接，不统一所有权限和生命周期；配置中引用插件仍意味着运行代码，必须有来源审查与版本固定。</p>
+<h3>端侧模型与推理</h3>
+<p><a href="https://github.com/ggerganov/llama.cpp">llama.cpp</a>、<a href="https://ml-explore.github.io/mlx/">MLX</a> 与 <a href="https://pytorch.org/executorch/">ExecuTorch</a> 可作为不同平台的运行时入口。GPTQ 和 AWQ 是量化方法路线，GGUF 是模型文件格式，三者不应当作同一层级的互斥格式。选择时核对模型结构、量化方案、后端支持与设备实测，不能只看文件能否下载。</p>
+<h3>隐私与端云协同</h3>
+<table><thead><tr><th>数据类别</th><th>默认位置</th><th>外发条件</th></tr></thead><tbody><tr><td>原始报文与设备标识</td><td>本地受控存储</td><td>本教学方案不开放</td></tr><tr><td>派生缺测统计</td><td>本地草稿</td><td>去标识、授权与目标核对</td></tr><tr><td>错误日志</td><td>本地轮转</td><td>脱敏后按维护政策处理</td></tr><tr><td>模型上下文</td><td>本地推理进程</td><td>云回退必须单独授权</td></tr></tbody></table><p>端云协同不等于只能全上传或全不传。字段裁剪、摘要和固定投递目标可以减小数据量，但摘要也可能含敏感信息，需要内容检查和访问控制。</p>
+<h3>一句话总结</h3>
+<p>这两个方向最终都要为一次运行给出可核对清单：采用哪版配置、在哪台设备执行、读了什么、改了什么、发到了哪里。没有这份清单，热更新和本地化都很难被验证。</p>
+</section>
+
+<section id="practice"><h2>动手验证</h2>
+<p>以下均为设计练习，无需修改当前工作站配置或连接真实设备。</p>
+<h3>练习一：区分 Tool 与 Skill</h3>
+<p>把“计算缺测率”“调查波高突变”“保存草稿”“外发摘要”“更新固件”分类。分别指出程序契约与多步方法所在位置，说明技能为什么不能授予固件写权限。</p>
+<h3>练习二：画出可替换边界</h3>
+<p>画出当前模型、工具表、提示与会话版本，设工具表从 V3 切到 V4。规定切换发生在下一次决策前，并列出半写配置、未知工具与加载失败时应保留什么旧状态。</p>
+<h3>练习三：设计一个出域门</h3>
+<p>为船载质检工作站列四个只读或本地工具和一个受限投递工具。给每个工具写目标、载荷和副作用，构造“摘要里夹带原始报文”以及“目标重定向到公网”两条拒绝测试。</p>
+<h3>练习四：估算端侧预算</h3>
+<p>设模型 3B 参数、4-bit 权重，理论裸权重约 1.5 GB。另列量化元数据、KV 缓存、激活、索引和采集服务内存，不直接从权重得出能运行。说明需要在哪台设备测量峰值与长时发热。</p>
+</section>
+
+<section id="recap"><h2>回顾与自测</h2>
+<p>更新能力与限制数据流需要分别验收。配置成功加载不等于新 loop 正确，本地推理成功也不等于所有工具离线。</p><details><summary>配置改动什么时候能生效？</summary><div><p>取决于宿主实际读取与重建边界。下一步热载、显式 reload 和重启加载是不同策略，应以版本记录验证。</p></div></details><details><summary>本地模型给出精确温度就可以发布吗？</summary><div><p>不能。需追溯读取的记录、单位、时间与质检状态，生成数字不能替代测量。</p></div></details><details><summary>端侧超出资源预算时应怎么办？</summary><div><p>保留采集和安全控制优先级，减少上下文或停止分析，返回明确未完成项，不静默改用云端上传。</p></div></details><p>后续可用 <a href="19.html">学习地图</a> 选择需要补齐的概念，并用补编中的轨迹逐项检查。</p>
+</section>
+
+<section id="sources"><h2>源码与编写说明</h2>
+<p>本章对应快照 <code>d9e02cb</code> 的 Harness 与 Edge Agent 架构笔记。浮标数据、配置 V3/V4 与验证顺序为新教学设计，未运行热更新演示、GPU 或端侧硬件试验。</p><ul class="source-list"><li><a href="../14-deepseek-harness/01.arch.md">14-deepseek-harness/01.arch.md</a></li><li><a href="../15-Edge-Agent/01-Edge-agent.md">15-Edge-Agent/01-Edge-agent.md</a></li></ul><p>这些入口用于追溯研究材料，不表示项目目录已包含所有可运行组件。实际部署前需另查目标运行时与设备文档。</p>
+</section>
+
+<section id="notes" class="footnotes" role="doc-endnotes"><h2>补充脚注</h2>
+<p>以下两点属于新场景的风险控制建议。</p><ol><li id="note-1"><p>可自改写区域不宜包含最终权限政策、审计删除和验证器通过条件。将变更保留为提案，独立验证后由有权主体激活；失败时回到上一份完整有效版本，避免部分配置生效。 <a class="note-back" href="#note-ref-1" role="doc-backlink" aria-label="返回正文脚注 1">↩ 返回正文</a></p></li><li id="note-2"><p>整机测试除平均耗时外，还需观察低电量、内存压力、网络断开和长时运行时的采集延迟。系统应说明哪些功能可以降级，哪些必须继续，语言输出失败不能连带停止安全采集。 <a class="note-back" href="#note-ref-2" role="doc-backlink" aria-label="返回正文脚注 2">↩ 返回正文</a></p></li></ol>
+</section>
+</article><nav class="chapter-pager" aria-label="章节翻页"><a href="17.html">上一章 · 用 LangGraph 组织应用</a><a href="19.html">附录 · 学习地图与研究笔记</a></nav>
+<footer class="book-footer"><span>AI 工程师：从原理到实践</span><span>第 18 章 · 完整章节</span></footer></main></div>
+<p id="notice" class="sr-only" role="status"></p></body></html>

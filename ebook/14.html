@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>Hermes 的运行时与记忆 · AI 工程师</title><link rel="stylesheet" href="reader.css">
+<script defer src="reader.js"></script>
+</head>
+<body><a class="skip" href="#main">跳到正文</a><header class="bar"><div class="bar-inner"><a class="brand" href="index.html">← 全书目录</a><div class="reader-tools" role="group" aria-label="阅读设置"><button data-size="-2" aria-label="减小字号">A−</button><span id="font-value" aria-live="polite">20px</span><button data-size="2" aria-label="增大字号">A＋</button><button class="print" data-print>打印 / PDF</button></div></div><div class="progress" aria-hidden="true"></div></header>
+<div class="reader-layout"><aside class="chapter-toc"><span class="part-label">本章导航</span><nav aria-label="本章目录"><a href="#why">从一个循环到一套运行时</a><a href="#diagram">窄腰架构</a><a href="#loop">Agent Loop</a><a href="#context">Session、Turn 与 Context</a><a href="#prompt">Prompt 的三层缓存</a><a href="#memory">记忆四层体系</a><a href="#env">执行环境</a><a href="#cron">Cron 与 Gateway</a><a href="#eval">Eval 在主循环之外</a><a href="#state">状态落盘</a><a href="#external">延伸对照</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav><p>海洋浮标观测与数据质检助手</p><p>先检查证据和状态，再判断输出是否足以交付。练习可用纸笔完成，服务调用需自行配置。</p></aside>
+<main id="main" class="reading"><article><header class="chapter-head"><span class="edition">第四篇 · 理解模型，阅读真实实现</span><h1>Hermes 的运行时与记忆</h1><p class="deck">岸站工程师从终端、值班群和定时任务询问同一批浮标，运行时怎样维持会话、记忆与执行边界？沿 Hermes 的接线追踪一次处理。</p><p class="meta">第 14 篇阅读材料 · 海洋观测教学场景 · 数值推演与源码说明分开标注</p></header>
+<details class="mobile-toc"><summary>本章目录 · 16 个小节</summary><nav aria-label="移动版本章目录"><a href="#why">从一个循环到一套运行时</a><a href="#diagram">窄腰架构</a><a href="#loop">Agent Loop</a><a href="#context">Session、Turn 与 Context</a><a href="#prompt">Prompt 的三层缓存</a><a href="#memory">记忆四层体系</a><a href="#env">执行环境</a><a href="#cron">Cron 与 Gateway</a><a href="#eval">Eval 在主循环之外</a><a href="#state">状态落盘</a><a href="#external">延伸对照</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+</details>
+
+<aside class="lesson-note"><p>本章把浮标数据处理作为新教学任务。涉及真实项目时以本地学习快照为界，不把纸上计算当作设备或在线服务的测试结果。</p></aside><section id="why"><h2>从一个循环到一套运行时</h2>
+<p>值班员在终端问 B17 的温度突降原因，稍后又在群里发来“把刚才那份报告发给夜班”。如果两处入口各自实现一个循环，历史关联、权限与记忆很快出现分歧。定时巡检还可能同时处理同一设备，产生重复报告。把模型调用写通之后，还需要有人管理这些请求的身份、先后与持久状态。</p><p><code>08-hermes-agent/</code> 保存 Hermes 的架构讲义、摘录和教学 demo。它适合追踪从入口到 <code>AIAgent</code> 的共同路径，以及循环周围如何装配提示、记忆、执行环境和后台任务。本章使用浮标质检的新任务解释机制，不声称原项目已经具备浮标协议解析器。</p><p>建议为一次请求建立三份记录：用户期望完成什么，模型实际看见什么，程序真正执行什么。报告文字、工具观察和磁盘状态可能不同步，只有同时查看三者，才能解释“已经记住”为什么暂时没有进入下一次模型请求。</p>
+</section>
+
+<section id="diagram"><h2>窄腰架构</h2>
+<p>这张责任分配图以一个观测请求为单位。不同入口可以携带不同元数据，但推理和工具回填的语义应保持一致。</p>
+<h3>多种入口</h3>
+<figure class="book-diagram" aria-label="入口规范化对照"><table><thead><tr><th>原始入口</th><th>携带的数据</th><th>统一后仍需保留</th></tr></thead><tbody><tr><td>CLI 输入</td><td>工作目录、用户文本</td><td>本地会话标识</td></tr><tr><td>Gateway 群消息</td><td>平台、频道、发送者、消息 ID</td><td>授权主体与回复位置</td></tr><tr><td>Batch 或 API</td><td>任务参数、关联 ID</td><td>取消与结果关联关系</td></tr></tbody></table><figcaption>规范化不能抹去身份信息，否则多个值班组会读到彼此的上下文。</figcaption></figure>
+<h3>AIAgent 窄腰</h3>
+<figure class="book-diagram" aria-label="核心请求的证据账本"><pre>请求：检查 B17 / 06:00 至 07:00
+上下文：固定说明 + 当前历史 + 本轮记忆
+模型：提出读取日志的工具请求
+宿主：执行并绑定调用 ID
+模型：依据观察生成质检说明
+会话：追加消息及本轮结束状态</pre><figcaption>共同核心处理请求推进，适配器不应另做一套偷偷补数据的推理循环。</figcaption></figure>
+<h3>边缘能力</h3>
+<p>工具实现可替换的读取、计算和输出；技能描述如何组织质检步骤；记忆 Provider 负责外部存取；平台适配器负责投递。核心使用这些接口，但不必知道每个传感器型号。增加新数据源时，应检查工具契约和身份隔离，而不是复制整套 <code>run_agent.py</code>。</p>
+</section>
+
+<section id="loop"><h2>Agent Loop</h2>
+<p>一次用户输入可能触发多次模型调用。教学任务是比较 B17 两个时段，第一次请求先读原始记录，第二次调用计算差值，第三次才给报告。每个工具观察都要与发起它的调用编号配对，否则下一次模型请求无法确定某个数值来自哪次读取。</p><div class="code-label"><span>质检请求的教学轨迹</span><button data-copy="code-loop" aria-label="复制质检循环">复制</button></div><pre role="region" tabindex="0" aria-label="质检循环"><code id="code-loop">用户：比较 B17 的两个观测时段
+上下文构建 → 模型请求 read_records
+读取结果   → 写入对应 tool message
+模型请求 compute_delta → 写入计算结果
+模型给出最终说明 → 保存会话 / 回合收尾同步
+
+主动 memory 工具：可在工具迭代中发生
+外部 provider 同步：按回合生命周期处理</code></pre><p>不能把所有写记忆行为都放在图上的最后一个箭头。模型可以主动使用内置记忆工具；外部 Provider 的 turn 同步属于另一条路径；后台复盘也可能提炼稳定经验。上下文构建主要读取当时可用的状态，不会提前知道尚未完成的分析结论。</p><p>若读取工具超时，宿主应返回可识别的错误观察或终止状态，而不是伪造零值。最终回答自然结束只表示模型不再请求工具，是否已完成质检还需核对数据范围、缺测率与证据引用。循环终止和业务验收是两个边界。</p>
+</section>
+
+<section id="context"><h2>Session、Turn 与 Context</h2>
+<p>这里沿用讲义的术语：Session 是持续对话容器，Turn 是一条用户消息及其完整处理，工具往返发生在 Turn 内。不同项目会用不同粒度命名 turn，跨系统对照时应先写出边界，不能仅凭同名字段推断计数相同。</p>
+<h3>Session 启动</h3>
+<figure class="book-diagram" aria-label="会话快照版本"><table><thead><tr><th>时刻</th><th>磁盘记忆</th><th>模型前缀</th></tr></thead><tbody><tr><td>启动 S8</td><td>报告单位为摄氏度，版本 M4</td><td>读取 M4 并构建系统提示</td></tr><tr><td>首次请求</td><td>M4</td><td>继续使用同一前缀</td></tr></tbody></table><figcaption>会话拥有构建时的视图，磁盘文件和已组装提示不是同一个对象。</figcaption></figure>
+<h3>每个 Turn</h3>
+<p>假设值班员改为“以后同时显示开尔文”。本轮可通过工具返回新记忆的 live 状态，因此能在这次回复里采用新要求；但此前构建的系统前缀不会因为文件写入自动变成新版本。讲义描述的缓存策略把启动快照保留在 Session 内，压缩重建等特定边界才会重新组装。<sup><a class="note-ref" id="note-ref-1" href="#note-1" role="doc-noteref" aria-label="脚注 1：冻结状态要有强刷出口">[1]</a></sup></p><p>检查上下文超限通常发生在请求边界，错误恢复也可能触发压缩。压缩改变活跃提示视图，不应被误认为把磁盘原始历史全部删除。不要依赖固定前缀承担紧急权限撤销，执行侧仍必须读取有效授权。</p>
+<h3>Session 结束</h3>
+<p>新 Session 启动时再读取更新后的记忆。旧会话可以保留已冻结的上下文，用于解释当时为何作出某个回答；需要立即采用新事实时，应明确启动新会话、重建上下文或在当前轮提供权威更新，而不是反复写同一文件并期待缓存自行失效。</p>
+</section>
+
+<section id="prompt"><h2>Prompt 的三层缓存</h2>
+<p>提示词先按用途分开：面向主模型的系统前缀、执行窄任务的辅助调用、当前用户轮的动态注入。辅助摘要器的指令不应该被当作质检 Agent 永久人设，某轮检索的设备维修记录也不应直接覆盖系统约束。</p><table><thead><tr><th>系统前缀层</th><th>浮标助手中的教学对应</th><th>变化会影响什么</th></tr></thead><tbody><tr><td>stable</td><td>身份、工具协议、技能目录、环境说明</td><td>靠前变化会使较长前缀不再复用</td></tr><tr><td>context</td><td>岸站项目说明、调用方约束</td><td>不同项目应有不同上下文来源</td></tr><tr><td>volatile</td><td>记忆块、时间等会话相关材料</td><td>易变部分放后，减少对前段的干扰</td></tr></tbody></table><p>这三层的名称描述内容稳定性，不表示每一层都在每轮重新渲染。讲义中的 Session 策略仍会冻结组装结果。服务商前缀缓存、本地字符串缓存和实例复用也不是同一种缓存：组装字符串未变，不代表供应商满足最小缓存长度、有效期或命中条件。</p><p>判断缓存问题时可保存脱敏后的层级摘要与内容 hash，比较从哪一层开始变化。不要为了追踪命中把完整用户记忆写入公共日志。当前观测时间若每秒改变，且位于前缀开头，会让后面的相同说明失去复用机会；它应处在变化区域，或按实际业务粒度更新。</p>
+</section>
+
+<section id="memory"><h2>记忆四层体系</h2>
+<p>浮标助手需要同时处理少量固定约定、过去对话、跨会话关系和领域资料。Hermes 的记忆层可以叠加，不要求接入外部服务后抛弃本地文件。</p><table><thead><tr><th>层次</th><th>适合存什么</th><th>不适合承担什么</th></tr></thead><tbody><tr><td>Markdown 常驻记忆</td><td>报告单位、稳定用户偏好</td><td>每十分钟一条的完整传感器流</td></tr><tr><td>state.db 与 session_search</td><td>按关键词回看历史讨论</td><td>保证业务事实当前仍有效</td></tr><tr><td>外部 Provider</td><td>相关经历召回、身份建模等可选增强</td><td>自动替代访问控制与授权</td></tr><tr><td>Obsidian Skill</td><td>较大领域库的组织与访问流程</td><td>每个会话无条件加载全部资料</td></tr></tbody></table><p>比如“报告默认使用 UTC”值得常驻，而“昨天 B17 曾断链”应带事件时间和来源，只有相关问题才召回。存储记录存在不代表仍然适用；一次暂时故障也不能升级为设备永久属性。</p><p>外部接线可沿抽象 Provider、Manager 注册、回合预取、注入、收尾同步及提示约定逐项查看。Mem0 这一类服务承担后端存取，Manager 管生命周期与结果边界。检查时应另外确认设备、用户与会话如何映射到后端命名空间，某个 Provider 超时是否影响其他结果，以及中断轮次哪些信息允许写入。</p>
+</section>
+
+<section id="env"><h2>执行环境</h2>
+<p>模型请求运行统计脚本时，真正读取文件的是 terminal 工具背后的执行环境。Local、Docker、SSH 或云沙箱可以对外返回相似的输出与退出码，但各自能看见的数据、进程与网络不同。工具接口一致并不意味着权限相同。</p><div class="code-label"><span>教学路径定位</span><button data-copy="code-env" aria-label="复制环境检查路径">复制</button></div><pre role="region" tabindex="0" aria-label="环境检查路径"><code id="code-env">terminal 请求：统计工作区内 records.csv 的缺测数
+  → terminal_tool 读取环境配置
+  → 创建或复用 environment
+  → environment.execute(command)
+  → 返回 output / returncode
+  → 宿主按工具调用编号写回观察
+# 路径相同不代表文件相同，需核对后端挂载与 cwd。</code></pre><p>若本地有 <code>records.csv</code>，远端工作区却没有，正确现象可能是文件不存在，而非脚本算法错误。排查先记后端、工作目录和路径映射，再看命令。隔离目录不等于沙箱，容器挂入宿主敏感目录也会扩大暴露面。</p><p>取消与超时还需要检查进程是否退出、临时文件是否留下、后端是否清理。这里的 Env 负责命令执行位置，Runtime 则负责整个会话、队列和模型循环；替换 Env 不能自动替换这些产品行为。</p>
+</section>
+
+<section id="cron"><h2>Cron 与 Gateway</h2>
+<p>岸站希望每天 08:00 汇总前一天缺测情况。Cron 保存的是何时发起工作、执行什么以及把结果交到哪里。讲义中的任务定义位于 <code>jobs.json</code>，常驻 Gateway 周期性检查到期项，可以启动 Agent 回合或运行脚本，再把结果保存到 <code>cron/output/</code> 并按配置投递。轮询周期描述发现到期任务的节奏，不是严格准点的实时保证。</p><p>Gateway 的入站路径把平台消息统一为 <code>MessageEvent</code>，按会话键恢复历史，再复用对应 Agent。这样同一值班组的连续讨论不会每条消息都失去前缀与历史。不同组、不同用户的会话键若设计错误，则可能出现跨组记忆泄漏，不能只用设备编号作为所有请求的会话键。</p><p>运行中的普通消息可以排队，停止、批准、拒绝和澄清这类控制消息却需要及时抵达。Adapter 和 Runner 都有忙时守卫，必须在两层识别控制路径，否则正在等审批的 Agent 会永远等不到被排队的批准。绕过忙队列仍需鉴权与请求匹配。平台重投递也需要幂等处理，避免同一份日报发送两次。<sup><a class="note-ref" id="note-ref-2" href="#note-2" role="doc-noteref" aria-label="脚注 2：多入口的幂等与去重">[2]</a></sup></p>
+</section>
+
+<section id="eval"><h2>Eval 在主循环之外</h2>
+<p>用户等报告时不宜再串上一套完整离线评分。运行时产生消息、工具观察和日志，评测读取已经保存的轨迹。权限审批则仍在执行前发生，不能因为“评测放旁路”就把权限门也移到事后。</p>
+<h3>热路径</h3>
+<figure class="book-diagram" aria-label="热路径的验收对象"><pre>输入观测范围 → 读取工具 → 计算工具 → 回答
+必须保持：调用与结果配对、取消能停止后续动作、无证据不报实测值</pre><figcaption>这些是运行中的行为要求，记录应足以在事后检查它们。</figcaption></figure>
+<h3>旁路观测</h3>
+<p>API 与工具 span、会话标签、错误日志提供定位入口。一次工具失败可能属于读取路径而非生成路径，Trace 的父子关系能显示错误传播。观测输出应限制敏感内容与体积，不能把每条原始浮标报文默认送到外部平台。</p>
+<h3>事后评测</h3>
+<p>教学 demo 把 pytest 契约断言与 <code>run_eval_suite.py</code> 的规则评分、RCA 分开。可以给它一条正确轨迹和一条工具编号错配的故障轨迹：前者通过，后者被检出，才说明规则有区分能力。离线不需要模型密钥的部分验证的是这些契约，不能据此宣称在线回答质量或服务可用率已被测过。</p>
+</section>
+
+<section id="state"><h2>状态落盘</h2>
+<p>文件分工决定备份与恢复能否解释清楚。人格、记忆和会话是不同状态，恢复一个旧文件可能让它们处在不同版本。</p><table><thead><tr><th>位置</th><th>用途</th><th>维护注意</th></tr></thead><tbody><tr><td><code>~/.hermes/config.yaml</code></td><td>行为配置</td><td>升级时检查字段兼容</td></tr><tr><td><code>~/.hermes/.env</code></td><td>凭据配置位置</td><td>不应纳入可公开的会话导出</td></tr><tr><td><code>memories/</code> 与 <code>SOUL.md</code></td><td>稳定信息和人格说明</td><td>区分文件版本与当前提示快照</td></tr><tr><td><code>cron/jobs.json</code></td><td>计划定义</td><td>恢复前检查时区、收件地址和重复执行</td></tr><tr><td><code>state.db</code></td><td>transcript 与全文索引</td><td>数据库备份需遵守 SQLite 一致性要求</td></tr></tbody></table><p>Profile 通过独立 <code>HERMES_HOME</code> 隔开多套状态，但共享的远端服务、宿主目录或操作系统账户仍可能跨 Profile 可见。Windows 原生目录与 WSL 的家目录也不同，迁移时应明确实际使用的根目录，不能把看到两个目录直接理解成数据丢失。</p>
+</section>
+
+<section id="external"><h2>延伸对照：真实 Agent Runtime 的公共课题</h2>
+<p>把 Hermes 当成一种实现来比较，可以区分普遍约束与项目选择。固定前缀属于成本策略，身份隔离则是任何实现都必须明确的安全要求。</p>
+<h3>记忆与上下文</h3>
+<p><a href="https://arxiv.org/abs/2310.08560">MemGPT</a> 提供上下文与外部存储调度的研究视角；<a href="https://arxiv.org/abs/2504.19413">Mem0</a> 关注可复用事实的提取与管理；<a href="https://arxiv.org/abs/2501.13956">Zep</a> 可用于思考时间关系。对浮标助手而言，需分别验证“记住默认单位”“找到上次断链讨论”“知道当前标定有效期”，这不是同一个召回测试。</p>
+<h3>执行环境与接口</h3>
+<p><a href="https://arxiv.org/abs/2405.15793">SWE-agent</a> 的接口研究提醒读者，工具输出怎样呈现会影响后续决策。观测读取工具若只回一堆无时间戳数字，模型很难正确比较两个时段。<a href="https://modelcontextprotocol.io/">MCP</a> 可统一连接协议，但设备访问权限、时间范围校验与副作用控制仍属于工具实现。</p>
+<h3>可观测与评测</h3>
+<table><thead><tr><th>待判断问题</th><th>所需材料</th><th>不可混用的证据</th></tr></thead><tbody><tr><td>提示前缀变了吗</td><td>层级内容 hash 与组装版本</td><td>实例复用不等于服务端缓存命中</td></tr><tr><td>工具调用正确吗</td><td>结构化参数和结果配对</td><td>最终回答顺畅不等于调用正确</td></tr><tr><td>报告可靠吗</td><td>实际证据、标注题与逐题评分</td><td>离线契约通过不等于模型质量通过</td></tr></tbody></table>
+<h3>一个可迁移的设计原则</h3>
+<p>稳定核心与可替换边缘之间要有足够明确的契约。比如更换报文读取后端时，要求返回相同时间标准、缺测表示和错误类型；若新后端把空值改成 0，就算接口仍返回 JSON，核心也会作出错误结论。接口稳定包括语义稳定，不只包括函数签名。</p>
+</section>
+
+<section id="practice"><h2>动手验证</h2>
+<p>练习以脱敏假数据为输入，先做接线检查，不要求连接聊天平台或外部记忆服务。</p>
+<h3>练习一：拆一次 Context 组装</h3>
+<p>阅读 <code>04-prompt/notes/1_assembly_map.md</code>，把“默认 UTC”“B17 本轮缺测”“报告工具 schema”分别放入适合的位置，说明哪些属于稳定约定、哪些只属于当前数据。给一次组装结果编号，再模拟文件更新，标出当前会话哪些区域会变化。</p>
+<h3>练习二：跟一条 Gateway 消息</h3>
+<p>参照 <code>08-gateway/notes/1_message_pipeline.md</code>，画出群消息的发送者、会话键、消息 ID 和投递目标。构造两个群同时讨论 B17 的情况，检查它们是否仍保有独立历史。若将消息 ID 重投递一次，指出哪里应阻止重复运行。</p>
+<h3>练习三：跑一次离线 Eval</h3>
+<p>在 <code>03-eval/demo/</code> 检查测试和评分入口，选一条工具配对错误的 fixture。先预测会由哪层检出，再选择是否运行。记录契约退出码和规则报告，不把故障样例被判失败误记为评测器损坏。</p>
+<h3>练习四：追踪一次记忆写入</h3>
+<p>沿 <code>07-mem-provider/</code> 写出预取、注入、生成和收尾同步的顺序。让用户在工具执行后中断，分别标记原始历史、稳定偏好和未完成推测是否允许保存，说明中断处理依据哪一个实现分支。</p>
+</section>
+
+<section id="recap"><h2>回顾与自测</h2>
+<p>检查 Hermes 中的一条质检请求，应能分别定位入口身份、当前会话视图、实际执行环境和事后评测材料。它们共用任务关联信息，但不应互相冒充。</p><details><summary>记忆更新成功，为什么报告仍沿用旧单位？</summary><div><p>查看写盘版本与当前系统提示快照，再查本轮是否有 live 返回。磁盘写入本身不会自动修改已经提交给模型的消息。</p></div></details><details><summary>评分器离线运行，是否可以省掉执行前权限检查？</summary><div><p>不能。事后评分只能发现问题，无法阻止已经发生的文件写入或外发。权限属于执行前控制。</p></div></details><details><summary>新增一个消息平台要重写什么？</summary><div><p>主要是事件规范化、授权与投递适配。共同循环与工具结果配对应复用；平台特有的重投递和会话规则仍需测试。</p></div></details><p><a href="15.html">下一章的 waku</a> 用更小的实现展示类似责任分工，可以对照每轮重建提示与会话快照两种选择。</p>
+</section>
+
+<section id="sources"><h2>源码与编写说明</h2>
+<p>本章使用快照 <code>d9e02cb</code> 的 Hermes 学习材料定位机制。浮标任务、快照版本 M4 与各项验收为教学构造，不是 Hermes 的业务接口。源码摘录不等于完整安装包，运行 demo 前应检查依赖与外部源码要求。</p><ul class="source-list"><li><a href="../08-hermes-agent/01-arch.md">01-arch.md</a></li><li><a href="../08-hermes-agent/02-memory.md">02-memory.md</a></li><li><a href="../08-hermes-agent/04-arch.md">04-arch.md</a></li><li><a href="../08-hermes-agent/03-eval/README.md">03-eval/README.md</a></li><li><a href="../08-hermes-agent/04-prompt/README.md">04-prompt/README.md</a></li><li><a href="../08-hermes-agent/05-env/README.md">05-env/README.md</a></li><li><a href="../08-hermes-agent/06-cron/README.md">06-cron/README.md</a></li><li><a href="../08-hermes-agent/07-mem-provider/README.md">07-mem-provider/README.md</a></li><li><a href="../08-hermes-agent/08-gateway/README.md">08-gateway/README.md</a></li></ul><p>查看相对链接需保留仓库目录。本文没有读取本机凭据、创建定时任务或连接真实群聊。</p>
+</section>
+
+<section id="notes" class="footnotes" role="doc-endnotes"><h2>补充脚注</h2>
+<p>以下补充用于设计质检产品，和讲义现有实现分开理解。</p><ol><li id="note-1"><p>紧急撤销某人的报告发送权时，不宜等待下一个 Session 才生效。稳定提示适合缓存，执行权限应在工具调用时按有效政策检查，并为旧授权定义失效条件。 <a class="note-back" href="#note-ref-1" role="doc-backlink" aria-label="返回正文脚注 1">↩ 返回正文</a></p></li><li id="note-2"><p>同一入站消息的重投递与两名值班员提出相似问题是两种事件。前者按平台消息 ID 去重，后者需要保留各自身份和授权；不能用问题文本相似度替代幂等键。 <a class="note-back" href="#note-ref-2" role="doc-backlink" aria-label="返回正文脚注 2">↩ 返回正文</a></p></li></ol>
+</section>
+</article><nav class="chapter-pager" aria-label="章节翻页"><a href="13.html">上一章 · 从零实现大语言模型</a><a href="15.html">下一章 · waku：精简工程实践</a></nav>
+<footer class="book-footer"><span>AI 工程师：从原理到实践</span><span>第 14 章 · 完整章节</span></footer></main></div>
+<p id="notice" class="sr-only" role="status"></p></body></html>

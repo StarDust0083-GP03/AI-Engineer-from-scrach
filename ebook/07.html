@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>记忆的四种实现 · AI 工程师</title><link rel="stylesheet" href="reader.css">
+<script defer src="reader.js"></script>
+</head>
+<body><a class="skip" href="#main">跳到正文</a><header class="bar"><div class="bar-inner"><a class="brand" href="index.html">← 全书目录</a><div class="reader-tools" role="group" aria-label="阅读设置"><button data-size="-2" aria-label="减小字号">A−</button><span id="font-value" aria-live="polite">20px</span><button data-size="2" aria-label="增大字号">A＋</button><button class="print" data-print>打印 / PDF</button></div></div><div class="progress" aria-hidden="true"></div></header>
+<div class="reader-layout"><aside class="chapter-toc"><span class="part-label">本章导航</span><nav aria-label="本章目录"><a href="#why">模型没有记忆</a><a href="#diagram">四种策略的分工</a><a href="#window">滑动窗口</a><a href="#summary">摘要记忆</a><a href="#longterm">长期记忆</a><a href="#scoring">三因子打分</a><a href="#compare">如何组合</a><a href="#external">延伸对照</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+<p>第二篇 / 第 07 章<br>建议阅读 30 分钟<br>练习另计</p><p>四个 Notebook 相互独立，但建议按窗口 → 摘要 → 长期 → 打分的顺序读。</p></aside>
+<main id="main" class="reading"><article><header class="chapter-head"><span class="edition">第二篇 · 让 Agent 拥有知识与记忆</span><h1>记忆的四种实现</h1><p class="deck">维护助手要记住值班组的报告习惯，也要忘掉已经撤销的临时安排。窗口、摘要、事实存储和排序共同决定下一次请求能看到什么。</p><p class="meta">第 07 章 · 完整章节 · 先修：第 04 章 RAG 链路</p></header>
+<details class="mobile-toc"><summary>本章目录 · 12 个小节</summary><nav aria-label="移动版本章目录"><a href="#why">模型没有记忆</a><a href="#diagram">四种策略的分工</a><a href="#window">滑动窗口</a><a href="#summary">摘要记忆</a><a href="#longterm">长期记忆</a><a href="#scoring">三因子打分</a><a href="#compare">如何组合</a><a href="#external">延伸对照</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+</details>
+
+<section id="why"><h2>模型没有记忆</h2><p>早班值班组要求报告先列停运车辆，晚班又补充“只在本周活动期间优先关注北桥站”。下周继续把北桥设为最高优先级，就成了记错；完全忘掉停运车辆优先的长期习惯，也会让报告反复被修改。</p><p>模型在一次请求里能使用什么，取决于运行时装入了什么。即使平台提供会话对象，也仍由平台保存和回填历史，不等于模型权重已经学习这条偏好。任务内轨迹、对话摘要和跨会话事实应分开建模，生命周期不同。</p><p>窗口保留最近的原话，摘要压缩较早的讨论，事实存储保存允许长期使用的记录，排序决定本次注入哪些候选。这些策略都有损失。最近的消息未必最重要，摘要可能丢掉“仅本周”，向量检索可能找到已撤销的临时安排。</p><p>本章用合成的值班记录演示，不含真实员工身份与城市运营数据。长期保存前要确认用途、范围和期限，不能因为一句话有助于回答就默认永久记忆。</p></section>
+
+<section id="diagram"><h2>四种策略的分工</h2><p>同一条值班要求在不同层中有不同形态。图中把信息损失和更新条件一起列出，避免把四种策略误当成四个相互替代的产品。</p><figure class="book-diagram" aria-label="公共自行车助手的状态与证据对照"><h3>滑动窗口</h3><table><thead><tr><th scope="col">保存对象</th><th scope="col">可见内容</th><th scope="col">被淘汰时发生什么</th></tr></thead><tbody><tr><td>最近消息组</td><td>值班员的原始限定词</td><td>只从模型输入移出，原审计记录可另存</td></tr></tbody></table><h3>摘要记忆</h3><table><thead><tr><th scope="col">压缩对象</th><th scope="col">摘要字段</th><th scope="col">要保留的限制</th></tr></thead><tbody><tr><td>旧讨论</td><td>报告先列停运；北桥优先仅本周</td><td>来源与适用日期不能丢</td></tr></tbody></table><h3>长期记忆</h3><table><thead><tr><th scope="col">记录键</th><th scope="col">持久化事实</th><th scope="col">失效路径</th></tr></thead><tbody><tr><td>team/day/report_order</td><td>停运车辆在前</td><td>用户修改、撤销或到期</td></tr></tbody></table><h3>三因子重排</h3><table><thead><tr><th scope="col">候选</th><th scope="col">排序用途</th><th scope="col">不可越过的条件</th></tr></thead><tbody><tr><td>有效且有权限的记录</td><td>按相关、近期、重要选少量</td><td>过期与跨租户记录先剔除</td></tr></tbody></table><figcaption>表中数据均为教学设定，用于追踪输入、状态与可核查结果。</figcaption></figure></section>
+
+<section id="window"><h2>滑动窗口</h2><p>滑动窗口限制的是本次输入历史，不一定意味着删除审计存档。需要先为系统指令、工具说明和预期输出留预算，再分配历史窗口，不能把模型全部上下文额度都给聊天记录。</p><p>单条消息长度差异很大，按条数裁剪不稳定。按 token 计量也要考虑消息封装开销，tiktoken 是否适配目标模型；未知模型可采用保守估计，但应明确这是估算。下面注入一个计量函数，演示按完整消息组淘汰。</p><div class="code-label"><span>离线预算模拟：cost 是人为设置，不声称为真实 tokenizer 输出</span><button data-copy="code-window" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-window">def trim_groups(groups, budget, count_tokens):
+    kept = list(groups)
+    while kept and sum(count_tokens(group) for group in kept) &gt; budget:
+        kept.pop(0)
+    return kept
+groups = [
+    {&quot;id&quot;: &quot;g1&quot;, &quot;cost&quot;: 25, &quot;text&quot;: &quot;报告先列停运车辆&quot;},
+    {&quot;id&quot;: &quot;g2&quot;, &quot;cost&quot;: 40, &quot;text&quot;: &quot;本周关注北桥&quot;},
+    {&quot;id&quot;: &quot;g3&quot;, &quot;cost&quot;: 30, &quot;text&quot;: &quot;查询当前维修进度&quot;},
+]
+assert [g[&quot;id&quot;] for g in trim_groups(groups, 70, lambda g: g[&quot;cost&quot;])] == [&quot;g2&quot;,&quot;g3&quot;]</code></pre><p>应把一次 assistant 工具请求和对应结果作为不可拆分组，避免留下孤立 tool 消息。最新一组本身超预算时，也要有明确策略：摘要、截断大结果或返回输入过长，不能悄悄裁掉用户全部问题。</p><p>窗口无法知道“先列停运”比几轮闲聊更重要。把预算压到 70，g1 就会退出输入；后续生成若不再按这个顺序，首先检查是否被裁掉，而不是认定模型故意忽视要求。关键偏好可以另行写入事实存储。</p></section>
+
+<section id="summary"><h2>摘要记忆</h2><p>摘要用有限篇幅承载旧对话的要点。它并不会无损保存历史，而是选择哪些信息进入新的表示。增量摘要把旧摘要与新消息合并，避免每轮重读全部原文，但也会把早期错误继续传递。</p><div class="code-label"><span>摘要输入与期望结构，不是某个远程服务的实际返回</span><button data-copy="code-summary" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-summary">summary_request = {
+    &quot;previous&quot;: &quot;报告先列停运车辆。&quot;,
+    &quot;new_messages&quot;: [&quot;本周活动期间，北桥站另列关注项。&quot;, &quot;下周恢复常规排序。&quot;],
+    &quot;required_fields&quot;: [&quot;长期习惯&quot;, &quot;临时安排&quot;, &quot;生效范围&quot;, &quot;来源消息编号&quot;],
+    &quot;instruction&quot;: &quot;只合并有证据的要求；保留期限和撤销条件；不推断值班员个人偏好。&quot;
+}
+expected = {
+    &quot;长期习惯&quot;: &quot;先列停运车辆&quot;,
+    &quot;临时安排&quot;: &quot;本周单列北桥，下周失效&quot;,
+    &quot;生效范围&quot;: &quot;当前值班组的维护报告&quot;,
+    &quot;来源消息编号&quot;: [&quot;g1&quot;, &quot;g2&quot;]
+}</code></pre><p>若只保存“北桥优先”，下一轮摘要再精炼也无法恢复丢掉的期限。可把有风险的日期、数量和否定条件另存结构字段，并保留引用原话。用户修订时从原始来源重新核对，而非让错误摘要自我解释。</p><p>更新摘要要有触发条件。每轮都摘要会增加延迟与费用，低信息量的消息还可能使文本反复漂移。可以在旧消息达到预算时批量压缩，同时保留最近原话。批次摘要有助于控制调用次数，但跨批次指代需要明确，例如“取消刚才那条”必须能定位到被取消的要求。</p></section>
+
+<section id="longterm"><h2>长期记忆</h2><p>长期事实存储需要主键、作用域、来源和有效期。向量只是辅助查找，无法表达授权，也无法决定一条安排是否已撤销。原 Notebook 的字典存储在进程结束时会丢失，名字叫长期不等于已经持久化。</p><p>下面用列表模拟事实记录，先按租户、值班组和有效时间过滤，再交给相似度打分。为了专注生命周期，示例把相似度函数注入，不下载嵌入模型。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-long" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-long">def recall(records, tenant, team, now, query, similarity, limit=3):
+    allowed = [r for r in records
+               if r[&quot;tenant&quot;] == tenant and r[&quot;team&quot;] == team
+               and not r[&quot;deleted&quot;] and r[&quot;valid_from&quot;] &lt;= now
+               and (r[&quot;valid_until&quot;] is None or now &lt; r[&quot;valid_until&quot;])]
+    scored = [(similarity(query, r[&quot;text&quot;]), r) for r in allowed]
+    return [r for score, r in sorted(scored, key=lambda p:p[0], reverse=True)[:limit]]
+
+record = {&quot;id&quot;:&quot;pref-1&quot;, &quot;tenant&quot;:&quot;city-demo&quot;, &quot;team&quot;:&quot;day&quot;,
+          &quot;text&quot;:&quot;维护报告先列停运车辆&quot;, &quot;source&quot;:&quot;g1&quot;, &quot;deleted&quot;:False,
+          &quot;valid_from&quot;:0, &quot;valid_until&quot;:None}
+assert recall([record], &quot;other&quot;, &quot;day&quot;, 1, &quot;报告&quot;, lambda *a:1) == []</code></pre><p>从对话提取事实时，应区分用户要求、模型建议和转述内容。值班员说“有人提议北桥优先”，不代表本组已采纳。抽取结果需附来源，遇到冲突时可要求确认，不要把最新一句不加分析地覆盖旧规则。<sup><a class="note-ref" id="note-ref-2" href="#note-2" role="doc-noteref" aria-label="脚注 2：记忆污染">[2]</a></sup></p><p>更新正文后必须同步重建其向量，否则搜索会按旧文本找到新内容。删除也要影响原始记录、向量索引、缓存和衍生摘要。<sup><a class="note-ref" id="note-ref-1" href="#note-1" role="doc-noteref" aria-label="脚注 1：隐私与删除权">[1]</a></sup> 主键稳定便于追踪；仅以文本哈希为 ID 时，同一句话在不同来源或不同期限下可能被错误合并。</p></section>
+
+<section id="scoring"><h2>三因子打分</h2><p>通过权限与时效过滤后，再比较相关性、近期性和重要性。加权评分属于产品策略，不是记忆的客观真值。重要但与当前任务无关的记录，不应靠高权重挤占所有上下文。</p><p>一个常见形式为 <code>w_rel*rel + w_rec*rec + w_imp*imp</code>。近期性可用 <code>exp(-λ*hours)</code>，也可按创建时间或最后访问时间定义。后者会让经常被召回的记忆持续保持新鲜，产生自我强化，应明确采用哪一种。</p><div class="code-label"><span>教学分数已置于 0 至 1，不在此另作候选批次 Min-Max</span><button data-copy="code-three" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-three">from math import exp
+candidates = [
+    {&quot;id&quot;:&quot;safe&quot;, &quot;rel&quot;:0.90, &quot;hours&quot;:12, &quot;importance&quot;:0.95},
+    {&quot;id&quot;:&quot;format&quot;, &quot;rel&quot;:0.80, &quot;hours&quot;:1, &quot;importance&quot;:0.40},
+    {&quot;id&quot;:&quot;old_route&quot;, &quot;rel&quot;:0.30, &quot;hours&quot;:48, &quot;importance&quot;:0.60},
+]
+def score(item, weights=(0.6,0.2,0.2), decay=0.1):
+    rel, recent, important = weights
+    return (rel*item[&quot;rel&quot;] + recent*exp(-decay*item[&quot;hours&quot;])
+            + important*item[&quot;importance&quot;])
+ranked = sorted(candidates, key=score, reverse=True)
+assert ranked[0][&quot;id&quot;] == &quot;safe&quot;</code></pre><p>safe 的分数约为 <code>0.54+0.060+0.19=0.790</code>，format 约为 <code>0.48+0.181+0.08=0.741</code>。如果近期性权重增加，format 可能领先，但安全要求不应只依赖这个排名才能出现，可以作为独立必须加载的规则。</p><p>λ=0.1 时，12 小时衰减为约 0.301，48 小时约 0.008。若业务偏好通常数月不变，按小时强衰减会过早遗忘。对候选做 Min-Max 时，新增或删除一项还会改变其余项归一化值，需要检查排序的批次敏感性。</p></section>
+
+<section id="compare"><h2>如何组合</h2><p>可以将四层组合成一份可解释的上下文预算，而非无限追加消息。设输入可分配 4000 个教学 token 单位，系统与工具占 1200，最近轨迹占 1600，摘要占 700，事实召回占 500。这是示意分配，真实计量需目标模型 tokenizer。</p><table><thead><tr><th scope="col">层</th><th scope="col">主要用途</th><th scope="col">错误时如何恢复</th></tr></thead><tbody><tr><td>窗口</td><td>保留最近原话与工具配对</td><td>从原始轨迹重建</td></tr><tr><td>摘要</td><td>承载旧任务背景</td><td>回查来源，重新生成</td></tr><tr><td>事实存储</td><td>保存被允许的跨会话要求</td><td>修订或撤销单条记录并更新索引</td></tr><tr><td>排序</td><td>选择本次适用候选</td><td>记录分项分数，调整权重与过滤</td></tr></tbody></table><p>先过滤，再排序，再组装，最后检查总预算。不要让低权限信息先进入模型上下文后再指望回答时不泄露。对停运安全规则、认证范围等内容，可独立于记忆排名固定加载；它们属于运行政策，不是可因相似度低而被遗忘的偏好。</p><p>框架的 checkpoint 常负责线程内状态，Store 类抽象可承载跨线程记录，但接口存在不代表已经落实删除、冲突和有效期。迁移到框架时要保留本页这些行为测试，而不是仅测试能否成功读写。</p></section>
+
+<section id="external"><h2>延伸对照：记忆系统的研究脉络</h2><p>记忆研究涉及检索、写入、时序和模型参数更新等不同路线。先确认存储的位置和更新方式，再比较论文结论。</p><h3>从人设记忆到操作系统</h3><p>Generative Agents 使用记忆流，并综合相关、近期和重要信号召回。对维护助手，这启发了多因子排序，但不意味着所有业务都应采用相同衰减权重。MemGPT 把主上下文与外部存储分层，通过显式操作交换信息，关注有限上下文下的持续交互。</p><p>Mem0 相关工作讨论从交互中提取、整合并检索有用事实。选用这类系统时，值班要求的新增、更新、冲突和删除要有明确接口，不能把“调用 add 成功”当成偏好已经准确记住。用临时北桥安排及其撤销作为验收样本，能检查写入策略是否保留范围。</p><h3>时序与知识图谱</h3><p>Zep 与 Graphiti 关注时间化关系，使事实的有效时间与系统记入时间可以分开。车辆昨天登记在青禾、今天转到北桥，两个事实可以同时保留用于历史查询，但当前问答只应采用相应时间上的有效记录。</p><p>图结构不会自动判定哪条记录可信。入库时间较新可能只是迟到数据，不能简单覆盖现场时间更近的事实。MemoryLLM 则探索模型内部可更新记忆，与本页外部记录存储不在同一实现层。</p><h3>框架里的记忆抽象</h3><table><thead><tr><th scope="col">抽象</th><th scope="col">能解决</th><th scope="col">仍需应用决定</th></tr></thead><tbody><tr><td>会话裁剪</td><td>缩短输入</td><td>哪些消息组不可拆</td></tr><tr><td>摘要节点</td><td>压缩历史</td><td>期限与否定条件怎样核验</td></tr><tr><td>外部存储</td><td>跨会话读取</td><td>身份隔离、删除和来源</td></tr><tr><td>时序图</td><td>保存带时间关系</td><td>冲突可信度与有效性政策</td></tr></tbody></table><h3>一个尚未解决的问题</h3><p>写入质量仍是最难的部分。对话可能包含假设、转述、撤销与未采纳提议；提取器若不区分，记忆会比单次错误影响更久。可先支持用户显式保存要求，再逐步开放自动提取，并提供查看和纠错入口。</p><p>研究入口：<a href="https://arxiv.org/abs/2304.03442">Generative Agents</a>、<a href="https://arxiv.org/abs/2310.08560">MemGPT</a>、<a href="https://arxiv.org/abs/2504.19413">Mem0</a>、<a href="https://arxiv.org/abs/2501.13956">Zep</a>、<a href="https://arxiv.org/abs/2402.04624">MemoryLLM</a>。这些链接用于方法对照，不表示本次安装或实测过相关服务。</p></section>
+
+<section id="practice"><h2>动手验证</h2><p>先构造可控记录，证明信息从哪里退出和怎样失效，再测试模型是否正确使用。不要用一条流畅回答代替存储行为验收。</p><h3>练习一：让滑动窗口“失忆”</h3><p>运行本页 trim_groups，用预算 70 观察 g1 被移出。把“先列停运”复制到独立事实记录后，再用 recall 获取，核对它不依赖窗口仍能返回。另造含工具请求与结果的一组，确保裁剪不会只删除半组。</p><h3>练习二：比较完整历史与摘要的 token</h3><p>将十条合成值班记录整理成摘要，使用同一个 tokenizer 分别计量原历史和摘要，计算 <code>1-summary_tokens/history_tokens</code>。随后逐项检查长期排序、临时北桥安排和到期时间是否保留。省下多少与漏掉什么应同时报告，本页没有给出未经测量的压缩率。</p><h3>练习三：动手调三因子权重</h3><p>把本页权重设为纯相关、纯重要和 <code>(0.3,0.5,0.2)</code>，手算 safe 与 format 的分数。再给 old_route 标记失效，断言它在评分前就被剔除；不应仅靠提高衰减让过期安排排得靠后。测试 last_accessed 更新后是否产生反复召回的正反馈。</p></section>
+
+<section id="recap"><h2>回顾与自测</h2><p>可用的记忆需要可追踪的来源和可撤销的生命周期。排序决定相关记录出现的次序，不能替代权限、安全规则与时间有效性。</p><details><summary>滑动窗口移除消息是否必须删除原记录？</summary><div><p>不必。窗口控制模型本次可见输入，审计存档可另按保留政策管理。删除权涉及所有副本，属于另一条生命周期操作。</p></div></details><details><summary>摘要少写了仅本周，后续能自动恢复吗？</summary><div><p>通常不能。需要回查原始来源或结构字段，再重建摘要。重复摘要不会凭空恢复丢失条件。</p></div></details><details><summary>重要性高的记录一定要进入每次回答吗？</summary><div><p>不一定。先看是否有效且相关；必须始终生效的安全政策应独立加载，不依赖记忆排名。</p></div></details><p><a class="button" href="08.html">继续阅读：协作状态与多 Agent</a></p></section>
+
+<section id="sources"><h2>源码与编写说明</h2><p>保留 d9e02cb 中四个 Notebook 的链接用于定位窗口、摘要、存储与评分。新记录与代码全部另写；合成 token 开销和相似度均已标注，不声称运行过在线记忆服务。</p><ul class="source-list"><li><a href="../03-memory/01-windowed_memory.ipynb">01-windowed_memory.ipynb</a>。可对照按 token 裁剪的实现与日志。</li><li><a href="../03-memory/02_long_term_memory.ipynb">02_long_term_memory.ipynb</a>。检查内存记录、用户范围与文本更新的关系。</li><li><a href="../03-memory/03_summary_memory.ipynb">03_summary_memory.ipynb</a>。用于比较完整历史与摘要的计量方式。</li><li><a href="../03-memory/04_three_factor_scoring.ipynb">04_three_factor_scoring.ipynb</a>。核对近期性、相关性和重要性怎样汇合。</li></ul><p>本页可以离线阅读与复制代码。打开源码链接时，需要让 ebook 与原仓库保持相对位置；在线资料和模型下载另需网络。</p></section>
+
+<section id="notes" class="footnotes" role="doc-endnotes"><h2>补充脚注</h2><p>这两条注释补足正文的操作边界。它们描述设计要求，不代表链接的演示程序已经具备相应保障。</p><ol><li id="note-1"><p>删除应按稳定主键传播到事实库、向量、缓存和派生摘要，并留下不含原隐私内容的操作凭据。若备份无法即时物理清除，应明确保留期限与恢复后的再次删除策略。 <a class="note-back" href="#note-ref-1" role="doc-backlink" aria-label="返回正文脚注 1">↩ 返回正文</a></p></li><li id="note-2"><p>事实抽取应保留原话及其作用域，区分确定要求、转述与假设。用户指出错误后，既修正文也重算向量，并使旧摘要失效。只在聊天里道歉而未更新存储，下一次仍可能召回同一错误。 <a class="note-back" href="#note-ref-2" role="doc-backlink" aria-label="返回正文脚注 2">↩ 返回正文</a></p></li></ol></section>
+</article><nav class="chapter-pager" aria-label="章节翻页"><a href="06.html">上一章 · 评测 RAG 与处理 PDF</a><a href="08.html">下一章 · 多智能体如何协作</a></nav>
+<footer class="book-footer"><span>AI 工程师：从原理到实践</span><span>第 07 章 · 完整章节</span></footer></main></div>
+<p id="notice" class="sr-only" role="status"></p></body></html>

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>多 Agent 实战：分层、监督与运维 · AI 工程师</title><link rel="stylesheet" href="reader.css"><script defer src="reader.js"></script></head>
+<body><a class="skip" href="#main">跳到正文</a><header class="bar"><div class="bar-inner"><a class="brand" href="index.html">← 全书目录</a><div class="reader-tools" role="group" aria-label="阅读设置"><button data-size="-2" aria-label="减小字号">A−</button><span id="font-value" aria-live="polite">20px</span><button data-size="2" aria-label="增大字号">A＋</button><button class="print" data-print>打印 / PDF</button></div></div><div class="progress" aria-hidden="true"></div></header>
+<div class="reader-layout"><aside class="chapter-toc"><span class="part-label">实战补编 / 21</span><nav aria-label="本章目录"><a href="#why">用一份报告解释整套多 Agent 系统</a><a href="#diagram">三层职责与两种判断</a><a href="#trace">从输入到人工批准：一条完整轨迹</a><a href="#read">架构基础七个实验，各自回答什么</a><a href="#frameworks">03–08：框架换了，职责没有变</a><a href="#ops">09：从“会回答”到“可运营”</a><a href="#practice">不用写代码的架构验收</a><a href="#sources">来源与范围</a><a href="#external">与主线章节对照</a><a href="#notes">补充脚注</a></nav><p>海洋浮标观测与数据质检助手</p><p>先检查证据和状态，再判断输出是否足以交付。练习可用纸笔完成，服务调用需自行配置。</p></aside><main id="main" class="reading"><article><header class="chapter-head"><span class="edition">第六篇 · 项目实战补编</span><h1>多 Agent 实战：分层、监督与运维</h1><p class="deck">一份浮标质检周报如何在取证、分析、复核与批准之间交接？把多 Agent 的任务依赖、权限和运维指标放到同一条轨迹上检查。</p><p class="meta">第 21 篇阅读材料 · 海洋观测教学场景 · 数值推演与源码说明分开标注</p></header><details class="mobile-toc"><summary>本章目录 · 10 个小节</summary><nav aria-label="移动版本章目录"><a href="#why">用一份报告解释整套多 Agent 系统</a><a href="#diagram">三层职责与两种判断</a><a href="#trace">从输入到人工批准：一条完整轨迹</a><a href="#read">架构基础七个实验，各自回答什么</a><a href="#frameworks">03–08：框架换了，职责没有变</a><a href="#ops">09：从“会回答”到“可运营”</a><a href="#practice">不用写代码的架构验收</a><a href="#sources">来源与范围</a><a href="#external">与主线章节对照</a><a href="#notes">补充脚注</a></nav></details>
+<section id="why"><h2>用一份报告解释整套多 Agent 系统</h2>
+<p>岸站要求生成本周的“观测完整性、异常候选、处理建议”。单个 Agent 可以起草，拆成多角色的理由应是证据检查与依赖清晰，而非希望更多模型互相赞同。摘要和异常扫描可以独立处理同一批记录，建议却依赖已经确认的问题，不能一开始就把所有分支当作独立工作。</p><p><code>04-multiagent/multi-agent-arch</code> 的材料包含架构实验、完整分层 Notebook、框架练习和运维演示。模拟检索、NLI、内存 Trace 和 MockLangSmithClient 用于呈现接线，不代表访问了真实平台。索引提及的部分拆分文件在快照中并未单独出现，相应内容可在 <code>02_hierarchical_multi_agent_demo.full.ipynb</code> 追溯。<sup><a class="note-ref" id="note-ref-1" href="#note-1">1</a></sup></p><p>本章重新设计周报任务与数值，原项目没有因此接入浮标观测。每个角色都应交付带证据编号的结构化产物，避免从一个自由文本摘要传到另一个自由文本摘要时丢掉依据。</p>
+</section>
+<section id="diagram"><h2>三层职责与两种判断</h2>
+<p>把任务调度、事实判断和发布授权分开，才能知道哪一类错误该由谁处理。</p>
+<h3>任务向下分发，证据向上汇总</h3>
+<figure class="book-diagram" aria-label="责任与产物矩阵"><table><thead><tr><th>角色</th><th>负责产物</th><th>无权代替</th></tr></thead><tbody><tr><td>Workers</td><td>完整率统计、异常候选及证据 ID</td><td>批准外发</td></tr><tr><td>Orchestrator</td><td>依赖调度、结果汇合、部分失败状态</td><td>把调度完成当作事实正确</td></tr><tr><td>Supervisor</td><td>依据政策决定交付或转人工</td><td>绕过执行层身份授权</td></tr></tbody></table><figcaption>图 21-1 · 调度者协调工作，监督者应用交付规则，执行者保留可追溯证据。</figcaption></figure>
+<h3>内容完成后的发布分支</h3>
+<figure class="book-diagram" aria-label="检查结果与放行分离"><pre>草稿 → Verifier：断言 / 证据 / 支持程度
+                     ↓
+Supervisor：自动交付条件是否满足？
+  ├─ 是：进入受限发布工具
+  └─ 否：带失败断言和证据创建审核票据</pre><figcaption>分数提供判断材料，不会自动赋予工具执行权限。</figcaption></figure>
+</section>
+<section id="trace"><h2>从输入到人工批准：一条完整轨迹</h2>
+<p>教学任务 J52 处理 7 天、3 台浮标的周报。文件范围、时间标准与接收值班组在收件时固定，所有角色带相同 job_id，但只接收自己所需的字段。</p><ol><li><p>取证器先确认访问范围，返回记录批次 E12 与维护记录 M8。若某台设备缺一整天，状态写明资料缺口，不以空列表冒充全天正常。</p></li><li><p>完整性 Worker 统计应有时槽与实收数，异常 Worker 标出突变候选，两者可并行读取 E12。标定核对若依赖维护记录，可独立处理 M8。</p></li><li><p>建议 Worker 等待异常与标定结果，只对已确认条件给建议；不确定原因写为待查，不把“温度跳变”直接等同传感器损坏。</p></li><li><p>汇总器生成固定栏目并保留来源。复核器拆出 12 个可核验断言，其中 9 个有支持，教学支持率为 9/12=0.75。</p></li><li><p>假设自动交付门槛设为 0.85，且关键设备结论必须全部有据。此草稿转人工，票据列出 3 个失败断言、原片段、草稿版本及允许操作。</p></li><li><p>审核人要求修订后，形成新草稿版本再复核。批准只对应当前版本与目标，不把一次批准永久应用于以后周报。</p></li></ol><p>门槛是本章教学配置，不是海洋行业标准。平均支持率也不能掩盖关键结论错误，必须单独检查不允许失败的断言。</p>
+<h3>并行的收益应该怎么算</h3>
+<p>教学耗时设为取证 0.15 秒、完整性 0.35 秒、异常扫描 0.45 秒、建议 0.20 秒、复核 0.10 秒。串行总计 1.25 秒；前两项分析并行且建议等待二者时，关键路径为 <code>0.15+max(0.35,0.45)+0.20+0.10=0.90</code> 秒，理想节省 0.35 秒，未计队列和汇总开销。</p><p>若把建议也放进 max，会错误消除它对异常结果的依赖。并行减少墙钟等待，不自动减少模型调用数量和 token。超时后的部分结果能否交付也要提前规定，不能由最先完成的 Worker 临时决定。</p>
+</section>
+<section id="read"><h2>架构基础七个实验，各自回答什么</h2>
+<table><thead><tr><th>实验形式</th><th>新周报任务中的用法</th><th>检查边界</th></tr></thead><tbody><tr><td>01.1 单体</td><td>顺序完成统计、扫描、建议</td><td>作为最简单基线，保留各阶段结果方便定位</td></tr><tr><td>01.2 Pipeline</td><td>批次经队列流向下阶段</td><td>慢阶段造成积压时有容量与停机信号</td></tr><tr><td>01.3 Hub-and-Spoke</td><td>中心分派各设备只读分析</td><td>部分设备失败时报告整体与局部状态</td></tr><tr><td>01.4 Blackboard</td><td>共享板保存证据、断言与审核</td><td>每字段明确写入者与版本</td></tr><tr><td>01.5 幂等</td><td>J52 重投递不重复发周报</td><td>认领、发布结果与唯一键需要可靠存储</td></tr><tr><td>01.6 可观测</td><td>各 Worker 与父任务关联</td><td>父子调用不能重复累计成本或时延</td></tr><tr><td>01.7 降级</td><td>生成失败时只返回统计与证据</td><td>明确缺少解释，不能标完整周报</td></tr></tbody></table><p>共享 owner 字段不等于锁。两个 Worker 都读到 pending 后再写 owner，仍可能双重认领，需要条件更新、事务或可靠队列。演示中的数据库事务也不能让另一个独立 Redis 写入自动参与同一事务；跨系统副作用应使用目标服务的幂等键或适合的消息协议。</p><p>把周报结果与去重状态放在同一事务域可以减少窗口，但网络发送已经发生而结果未保存时仍需查询或重试策略。架构图上的“原子”字样不构成证明，应追踪真正执行副作用的边界。</p>
+</section>
+<section id="frameworks"><h2>03–08：框架换了，职责没有变</h2>
+<p>不同框架可以承载相似责任，阅读时先找到下一执行者如何确定，再看状态与证据怎样传递。</p>
+<h3>AutoGen：看谁接着发言</h3>
+<p>GraphFlow 适合固定路径，SelectorGroupChat 由选择器决定下一发言者。用于周报时，后者可能让核对者追问缺失依据，但必须限制回合与重复请求。ListMemory 提供可供读取的记录，不自动具有持久存储、设备隔离和有效期治理。</p><p>检查对话式协作时，应确认终止词由谁生成、出现在哪条消息，以及失败角色是否仍被记为完成。一次角色说“完毕”不代表它的证据或统计正确。</p>
+<h3>CrewAI：看任务交给哪个角色</h3>
+<p>Sequential Crew 可按取证、分析、写作顺序组织，Hierarchical Process 让管理模型分派任务。角色说明表达职责，工具端仍需限制设备与路径。把维护记录接口接到真实服务后，延迟、授权和错误都与 mock 不同，需重新测依赖与失败处理。</p><p>若多个角色实际共用同一上下文并重复复述，拆分可能只增加成本。可以对比独立输入与共享摘要两种设置，检查复核是否真的发现上游故意植入的错误。</p>
+<h3>LangGraph：看状态沿哪条边流动</h3>
+<p>状态图可明确写出取证、分析、建议、复核和人工节点。验证失败应把失败断言带回指定上游，清除受影响的下游结果，而非把“再想想”广播给所有人。条件边依据结构化状态，预算字段限制回边次数。</p><p>课程练习从流水线、队列 Worker 到 Supervisor 与 HITL，分别锻炼依赖表达、并发认领和受控交付。工程总结中的 Schema、幂等与 Trace 是框架之外也需要的契约，不会因为使用某个库自动生效。</p>
+</section>
+<section id="ops"><h2>09：从“会回答”到“可运营”</h2>
+<p>一个 Run 可表示一次模型或工具调用，parent_run_id 把它们关联成 Trace。父任务的等待时间已覆盖子任务执行，不能把父子时长再相加。模型 usage 则应按真实叶子调用聚合，避免父层汇总又被累计一次。</p><table><thead><tr><th>运维现象</th><th>先看什么</th><th>有依据的处理</th></tr></thead><tbody><tr><td>断言错误</td><td>对应 E12/M8 片段与转换</td><td>区分取证缺失和生成新增</td></tr><tr><td>周报变慢</td><td>队列等待、各分支完成时间</td><td>优化关键路径而非只看平均调用</td></tr><tr><td>费用增加</td><td>迭代、重试、输入输出 usage</td><td>减少重复取证或约束预算</td></tr><tr><td>升级后退化</td><td>同题集、同评分器逐题结果</td><td>按明确容差阻断发布</td></tr><tr><td>人工审核积压</td><td>失败类型、票据年龄与责任人</td><td>改进证据或分流，不能放低门槛掩盖</td></tr></tbody></table><p>教学基线支持率为 0.92，允许相对下降 2%，最低为 <code>0.92*(1-0.02)=0.9016</code>。新结果 0.90 略低于线，应判失败。若政策说下降 2 个百分点，下限却是 0.90；两个口径必须分开写，不凭文字印象判断。</p><p>令牌桶限制长期速率并允许短突发，信号量控制在途数量，总预算限制整个任务费用。三者分别防止限流、资源耗尽和持续烧费，队列也要有容量。09 材料中的质量分与平台客户端有模拟成分，不能当作真实 RAGAS 或 LangSmith 的运行结果。<sup><a class="note-ref" id="note-ref-2" href="#note-2">2</a></sup></p>
+</section>
+<section id="practice"><h2>不用写代码的架构验收</h2>
+<details><summary>异常扫描还未完成，能否先让建议角色输出最终维护动作？</summary><div><p>不能将其作为基于事实的最终建议。若确需提前准备，只能生成标注为候选的方案，并在异常与标定结果齐备后重新核验。</p></div></details><details><summary>认领记录中只有一个 owner，是否证明从未重复执行？</summary><div><p>不证明。两个 Worker 可能先后覆盖同一字段。需要认领操作的原子结果、执行日志和副作用幂等记录。</p></div></details><details><summary>支持率达到阈值，为什么仍可能不得外发？</summary><div><p>阈值只反映某种质量。关键断言、访问权限、接收人和审批政策仍需满足，任何一个硬条件失败都可以阻止发布。</p></div></details><p>纸上验收可给 J52 注入一个错误设备编号、一条过期维护记录和一次重投递，分别预测由哪个角色或程序门检出。若只能回答“监督者会发现”，说明边界还未落实。</p>
+</section>
+<section id="sources"><h2>来源与范围</h2>
+<p>本章对应架构 01 与七个拆分实验、02 完整分层 Notebook、03 至 08 框架练习及 09 运维材料。J52 周报、12 个断言和并行耗时全部重新构造，未调用外部协作框架或观测平台。</p>
+</section><section id="external"><h2>与主线章节对照</h2>
+<p>回查协作模式可读 <a href="08.html">多 Agent 原理</a>，按子项目找入口可用 <a href="coverage.html">覆盖地图</a>，全文对照可读 <a href="book.html">合订本</a>。本页的重点是责任与依赖，框架 API 可在确认版本后再深入。</p>
+</section><section id="notes" class="footnotes"><h2>补充脚注</h2>
+<ol><li id="note-1"><p>教学 mock 把复杂依赖替换成可预测输入，适合观察职责分配。真实服务会引入认证、部分失败和非确定输出，需另外建立测试，不能用模拟成功替代生产验证。 <a class="note-back" href="#note-ref-1">返回正文 ↑</a></p></li><li id="note-2"><p>所有耗时和容差计算都是纸上数字。真正比较并行收益时，要固定任务、模型与并发上限，计入队列和重试，并同时报告调用费用，不能只挑最快一次。 <a class="note-back" href="#note-ref-2">返回正文 ↑</a></p></li></ol>
+</section>
+<nav class="chapter-pager" aria-label="章节导航"><a href="20.html">← 上一篇</a><a href="22.html">下一篇 →</a></nav></article><footer class="book-footer"><span>AI 工程师 / 项目阅读本</span><span>阅读本 2.0 · 实战补编</span></footer></main></div><p id="notice" class="sr-only" role="status"></p></body></html>

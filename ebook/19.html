@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>附录：学习地图与研究笔记 · AI 工程师</title><link rel="stylesheet" href="reader.css">
+<script defer src="reader.js"></script>
+</head>
+<body><a class="skip" href="#main">跳到正文</a><header class="bar"><div class="bar-inner"><a class="brand" href="index.html">← 全书目录</a><div class="reader-tools" role="group" aria-label="阅读设置"><button data-size="-2" aria-label="减小字号">A−</button><span id="font-value" aria-live="polite">20px</span><button data-size="2" aria-label="增大字号">A＋</button><button class="print" data-print>打印 / PDF</button></div></div><div class="progress" aria-hidden="true"></div></header>
+<div class="reader-layout"><aside class="chapter-toc"><span class="part-label">本章导航</span><nav aria-label="本章目录"><a href="#map">四层学习地图</a><a href="#path">仓库学习路线</a><a href="#memory">记忆的三个补充视角</a><a href="#eval">Agent 评测的特殊性</a><a href="#coding">AI Coding 工作流</a><a href="#interview">面试口述要点</a><a href="#next">如何继续学习</a><a href="#external">延伸对照</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav><p>海洋浮标观测与数据质检助手</p><p>先检查证据和状态，再判断输出是否足以交付。练习可用纸笔完成，服务调用需自行配置。</p></aside>
+<main id="main" class="reading"><article><header class="chapter-head"><span class="edition">附录 · 学习地图与研究笔记</span><h1>附录：学习地图与研究笔记</h1><p class="deck">把学习内容变成可以复查的能力：围绕浮标观测任务整理依赖、记忆更新、评测口径和编码交接，不把笔记观点当作测试结论。</p><p class="meta">第 19 篇阅读材料 · 海洋观测教学场景 · 数值推演与源码说明分开标注</p></header>
+<details class="mobile-toc"><summary>本章目录 · 12 个小节</summary><nav aria-label="移动版本章目录"><a href="#map">四层学习地图</a><a href="#path">仓库学习路线</a><a href="#memory">记忆的三个补充视角</a><a href="#eval">Agent 评测的特殊性</a><a href="#coding">AI Coding 工作流</a><a href="#interview">面试口述要点</a><a href="#next">如何继续学习</a><a href="#external">延伸对照</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+</details>
+
+<section id="map"><h2>四层学习地图</h2>
+<p>“能做一个质检助手”包含不同层次的工作。读懂一次模型请求、限制工具、管理长任务和解释训练目标都重要，却不必一次学完。可以用一份能力证据表记录自己已经验证的部分，按当前任务缺口选择阅读，而非只统计读过多少章。</p>
+<h3>Foundation</h3>
+<figure class="book-diagram" aria-label="基础能力证据"><table><thead><tr><th>能力</th><th>新场景中的证据</th><th>发现不足时</th></tr></thead><tbody><tr><td>API 与消息</td><td>一条读取请求正确绑定工具结果</td><td>回到 01 的调用机制</td></tr><tr><td>上下文与检索</td><td>手册型号和页码进入当前请求</td><td>检查 04、05 的候选召回</td></tr><tr><td>模型直觉</td><td>解释缓存与序列长度的关系</td><td>看 13 的计算流程</td></tr></tbody></table><figcaption>基础层要求能解释输入从哪里来，不以术语熟悉程度代替验证。</figcaption></figure>
+<h3>Capability</h3>
+<p>行动能力关注模型如何在新观察后改变路线。给 B17 一条空记录，观察它是澄清时间范围、换证据源还是编造数值；需要分工时检查角色之间是否保留证据。相关材料集中在 01 至 03 与 08，验收单位应是完整轨迹。</p>
+<h3>Runtime</h3>
+<p>运行能力关注长时间与多请求：历史保留、权限、任务状态、预算和恢复。一次正确回答不足以证明本层完成，可以加入重投递、取消、重启和越权输入。07、09、10 及真实运行时章节提供不同实现入口。</p>
+<h3>Model</h3>
+<figure class="book-diagram" aria-label="模型与评测分工"><pre>模型层：训练目标、结构、参数更新、推理资源
+评测线：从基础到运行层都要有验证，不能只放在最后
+示例：模型输出合法质检标签，并不证明读取的是授权设备。</pre><figcaption>四层地图是阅读索引，不是严格串行课程；评测横跨各层。</figcaption></figure>
+</section>
+
+<section id="path"><h2>仓库学习路线</h2>
+<p>概念阅读后再精读实现，容易区分“必须满足的机制”和“项目的某种选择”。比如记忆需要有效读写，但每轮重建 system 或会话冻结只是两种策略；先知道这个差别，再看源码才不会把一套实现当成全部答案。</p><div class="code-label"><span>按任务缺口安排的阅读路径</span><button data-copy="code-path" aria-label="复制新阅读路径">复制</button></div><pre role="region" tabindex="0" aria-label="新阅读路径"><code id="code-path">一条观测查询：01 调用 → 02/03 行动与规划
+资料有出处：04/05 检索 → 06 验收
+跨班次持续：07 记忆 → 09/10 约束与状态
+实现对照：08-hermes-agent → 12-hermes-agent-small → 13-pi-agent
+长期维护：09 Loop 材料 → 10 CI/CD 材料 → 11 LangGraph 材料
+模型疑问：07-llm_from_scrach 按具体计算问题回查</code></pre><p>编号在这里是仓库目录，不等于电子书章节号。阅读计划应标明正在查目录还是章节，以免将 <code>08-hermes-agent</code> 误当第 08 章。<code>00-大纲/</code> 提供主题顺序，<code>99-My idea/</code> 提供研究线索，两者都是入口，不能代替源码行为证据。</p><p>每次精读只跟一条链路：比如一条记忆从写入到下一轮可见，或者取消如何传到工具进程。写出入口、状态变化与出口后，再扩到相邻模块，避免在一堆目录间跳转却没有追完一个对象。</p>
+</section>
+
+<section id="memory"><h2>记忆的三个补充视角</h2>
+<p>浮标助手的记忆问题可以拆成容量、冲突和恢复三类。不同存储技术主要解决其中一部分，不能只因为接了向量库就认为长期记忆已经完整。</p>
+<h3>四层递进的内存体系</h3>
+<table><thead><tr><th>层次</th><th>保留内容</th><th>适用限制</th></tr></thead><tbody><tr><td>Conversation History</td><td>刚刚读取的报文与用户追问</td><td>窗口有限，早期约束可能离开上下文</td></tr><tr><td>Working Memory</td><td>本轮设备、时间标准、未完成项</td><td>需小而精，不能塞入全部日志</td></tr><tr><td>Semantic Recall</td><td>相关标定讨论与稳定约定</td><td>召回需过滤身份、时间和版本</td></tr><tr><td>Observational Memory</td><td>长会话中提炼的观察与事件</td><td>抽取、遗忘和溯源策略都要另外验证</td></tr></tbody></table><p>这套分类与 Hermes 的具体四层实现不是一一对应关系。前者按记忆用途划分，后者按文件、全文索引、外部服务与技能组织；同一个 SQLite 库也可以保存多种用途的数据。</p>
+<h3>记忆是一个闭环：Write → Reconcile → Read</h3>
+<p>教学场景中，B17 在 06 月 01 日前使用标定版本 C2，之后换成 C3。写入新记录后，调和步骤应给旧版本补有效结束时间，并保留来源；查询 05 月数据仍应取 C2，查询 06 月 03 日则取 C3。如果直接覆盖成“B17 使用 C3”，历史重算会错；如果把两条事实原样并列，模型又可能随意选择。</p><p>因此闭环至少包含候选写入、冲突识别、有效期与来源管理、按问题读取、过期或删除。写入失败与尚未确认的推测应分开状态，不能把一次工具错误永久保存成设备属性。调和可以由规则、人工或模型辅助，但最终结果需有可追查依据。</p>
+<h3>长对话摘要丢信息怎么办</h3>
+<p>长对话压缩前，将不可违反的条件放到结构化工作记忆，例如“原始报文只读”“仅处理 B17”。旧讨论分段摘要，细节留在带编号的原始记录；当前问题需要时再检索。若摘要写成“数据已修好”，后续恢复必须检查磁盘和测试，不能把省略细节误当验收完成。</p><p>情节蒸馏为稳定事实还要过筛：一次临时要求“这一份报告用本地时间”不应自动变成永久偏好。waku 的读门控决定是否召回，批量巩固决定何时抽取，二者有关但不是同一项筛选。应分别测漏召回和错误沉淀。</p>
+</section>
+
+<section id="eval"><h2>Agent 评测的特殊性</h2>
+<p>两个助手都正确指出缺测率为 8.33%，仍可能有很大差别：一个读了授权的 72 个时槽，另一个读错设备却碰巧得到相同比例。Agent 评测需要检查动作与环境状态，不只比较最后一句数字。</p><table><thead><tr><th>维度</th><th>教学测量项</th><th>应一起报告的条件</th></tr></thead><tbody><tr><td>能力</td><td>计算与解释是否正确</td><td>题集、金标和判定规则</td></tr><tr><td>可靠性</td><td>重复执行、失败恢复与超时率</td><td>重试、预算和每题运行次数</td></tr><tr><td>成本</td><td>模型调用、token、工具等待</td><td>模型版本与计价口径</td></tr><tr><td>安全</td><td>越权读取、未批外发、跨组串记忆</td><td>身份、权限和环境隔离</td></tr></tbody></table><p>教学数据里，A 在 20 题中通过 18 题且没有越权，B 也通过 18 题却有 2 次未经批准发送。若只报 90% 会掩盖业务不能接受的差异。应保留逐题轨迹、失败分类和副作用结果，聚合指标只是索引。</p><p>复现还需固定模型、工具版本、记忆初始状态、会话边界和外部数据。第一次运行留下的记忆可能帮助第二次，若不重置或明确报告，就不是相同条件。mock 用于验证控制流，真实模型用来测概率行为，两种结果分别标注。</p>
+</section>
+
+<section id="coding"><h2>AI Coding 工作流</h2>
+<p>让编码 Agent 修改浮标解析器时，任务说明、实现和验收应围绕同一条数据路径。需求是“空温度保留缺测”，测试必须覆盖空字符串与合法 0.0；只运行语法检查无法证明语义正确。</p>
+<h3>两个奇怪的约束</h3>
+<p>研究笔记中的 Smart Zone / Dumb Zone 提醒读者控制上下文噪声，但某个窗口百分比并不是所有模型统一的能力阈值。注意力计算规模随序列长度增长，也不能直接推出超过 40% 就必然变笨。模型、任务、证据位置和提示结构都会影响表现，应把这条说法当成待测启发。</p><p>清空会话会丢失隐含进展，摘要则可能引入误述。可从明确计划、代码和测试重建状态时，阶段边界重开较容易复现；进行中的调查还需要未完成项与证据路径，则应提供经过核对的交接。Clear 和 Compact 都需要检查哪些状态只存在于上下文，不能按口号选择。</p>
+<h3>端到端工作流</h3>
+<figure class="book-diagram" aria-label="解析器修改的交付证据链"><table><thead><tr><th>阶段</th><th>产物</th><th>进入下一阶段的条件</th></tr></thead><tbody><tr><td>澄清</td><td>区分空值、非法值与 0.0</td><td>有具体输入输出样本</td></tr><tr><td>规格</td><td>只改解析器，不改原始数据</td><td>范围与禁止事项明确</td></tr><tr><td>切片</td><td>解析、测试、文档三项依赖</td><td>每项有独立验收</td></tr><tr><td>实现</td><td>代码差异与测试输出</td><td>机器检查可重复</td></tr><tr><td>审查</td><td>边界用例、行为与风险说明</td><td>人确认高风险语义</td></tr></tbody></table><figcaption>交接依靠文件和证据，不依靠前一个会话自称完成。</figcaption></figure><p>Issue 应是一块可验证的小改动，而不是把整个助手需求换个名字。自动检查先过滤语法、类型和固定契约，人审再核对缺测语义、数据授权和未覆盖风险。AFK 实现仍要有时间、轮数和工作区限制，不是把正式岸站交给无人约束的循环。</p>
+</section>
+
+<section id="interview"><h2>面试口述要点</h2>
+<p>口述技术方案时，可以从 B17 的一个具体故障展开：读到空温度后怎样处理，为什么需要标定信息，何时暂停等人，怎样避免重复外发。这样的回答能把抽象名词连接到状态和证据。</p><table><thead><tr><th>追问</th><th>应说明的机制</th><th>可回查章节</th></tr></thead><tbody><tr><td>工具报错之后怎么办</td><td>错误观察、分类恢复和预算</td><td>01 至 03、09</td></tr><tr><td>如何判断回答有依据</td><td>候选召回、断言支持与版本</td><td>04 至 06、20</td></tr><tr><td>多人讨论怎样不串记忆</td><td>命名空间、会话键与权限过滤</td><td>07、14、24</td></tr><tr><td>批准后重启怎样继续</td><td>检查点、请求匹配与幂等</td><td>16、17</td></tr><tr><td>长期循环如何结束</td><td>完成证据、预算和取消</td><td>10 至 12、22</td></tr></tbody></table><p>如果还没有真实项目经历，可诚实标为教学练习，讲清构造输入与观察结果。不要把纸上设计包装成已经稳定运行的产品；对失败边界的解释通常比一串框架名更能说明理解。<sup><a class="note-ref" id="note-ref-2" href="#note-2" role="doc-noteref" aria-label="脚注 2：面试答案要能落到项目">[2]</a></sup></p>
+</section>
+
+<section id="next"><h2>如何继续学习</h2>
+<p>继续学习可以围绕一个小而真实的只读需求，例如每个值班日生成“缺测、异常候选和待确认项”。先限制数据范围与输出，不急于接设备写操作。这样能在有限预算内看到完整周期。</p><p>实现线从一个固定输入的统计工具起步，再加检索和报告；源码线选 Hermes 的一条完整记忆路径，与 waku、Pi 做责任归属对照；基础线在需要时补异步、数据库事务、模型计算与 CI。三条线共享同一验收样本，避免学习成果互不相干。</p><p>当系统运行一周后，记录题目分布、未知结论、恢复次数和人工修订原因。用这些实际失败决定下周读什么，而非追逐最新框架。学习笔记应把结论连到版本、数据和命令，旧结论失效时更新证据入口。<sup><a class="note-ref" id="note-ref-1" href="#note-1" role="doc-noteref" aria-label="脚注 1：笔记要与代码一起维护">[1]</a></sup></p>
+</section>
+
+<section id="external"><h2>延伸对照：把笔记连回主线</h2>
+<p>把研究笔记转成可验证问题，能避免将观点原样写进技术决策。下面每一项都有可能被反例推翻，因而适合作为下一轮实验入口。</p><table><thead><tr><th>笔记主题</th><th>可检验问题</th><th>需要的证据</th></tr></thead><tbody><tr><td>能力层次</td><td>模型强但工具权限错时是否仍危险</td><td>相同任务的动作轨迹</td></tr><tr><td>记忆闭环</td><td>新标定是否污染历史重算</td><td>不同日期查询结果</td></tr><tr><td>摘要压缩</td><td>只读约束在多次压缩后是否保留</td><td>恢复后工具请求</td></tr><tr><td>上下文预算</td><td>噪声与证据位置怎样影响判断</td><td>同题不同上下文的重复试验</td></tr><tr><td>编码工作流</td><td>新会话能否仅凭交接继续</td><td>重开后的实现与验收记录</td></tr></tbody></table><p>这些问题分别连接 07、10、11、16 与项目补编。<code>00-大纲/</code> 和 <code>99-My idea/</code> 可提供线索，但最终判断仍应回到实现和可重复观察。不能把研究笔记出现过的能力都记成仓库已完成。</p>
+</section>
+
+<section id="practice"><h2>动手验证</h2>
+<p>练习不需要真实服务，可用纸上状态表或脱敏的本地记录完成。</p>
+<h3>练习一：用四层地图自测</h3>
+<p>给四层各列一项可展示证据：正确工具回填、异常后改路线、重启后恢复、解释 KV 缓存。再各加一条会让结论失败的输入。只有正例而没有反例时，往往还没明确能力边界。</p>
+<h3>练习二：做一次记忆冲突处理</h3>
+<p>为 B17 构造 C2 与 C3 的有效期和两条观测日期，分别查询应使用哪个系数。加入一条来源未确认的 C4，说明为什么不能只按最新写入时间覆盖已批准记录。</p>
+<h3>练习三：计算你的 Smart Zone</h3>
+<p>在一组固定质检题中逐渐加入无关日志，保持关键证据内容不变但改变位置，记录准确率和输入长度。把所谓 40% 经验线当待比较条件，不将单次失败归因于某个普适百分比。没有模型环境时只写实验设计与判定标准。</p>
+<h3>练习四：写一份诚实的评测报告</h3>
+<p>为两个助手写评测表，至少含每题结果、工具越权、步骤数、总 usage、失败恢复与是否外发。给二者相同通过率但不同安全表现，解释为何不能只给一个排名。</p>
+</section>
+
+<section id="recap"><h2>回顾与自测</h2>
+<p>学习地图有用的前提是可以回到证据。记忆必须能解释有效期，评测必须能解释运行条件，交接必须能让新会话继续，而非只展示一份漂亮提纲。</p><details><summary>读源码前需要掌握到什么程度？</summary><div><p>至少能描述一次请求的模型、工具、状态与验收边界。随后通过源码修正理解，不必等学完所有概念才开始。</p></div></details><details><summary>相同通过率还能比较什么？</summary><div><p>错误类型、越权和外发、重试次数、成本、时延与恢复结果。相同答案比例可能对应完全不同风险。</p></div></details><details><summary>新会话和摘要哪个更可复现？</summary><div><p>取决于外部状态是否完整。能从规格和产物重建时新会话较直观；否则需要核对过的摘要与证据。两者都不能忽略磁盘与副作用。</p></div></details><p>继续阅读 <a href="20.html">Agentic RAG 补编</a>，可以把这些复习方法应用到一条具体取证轨迹。</p>
+</section>
+
+<section id="sources"><h2>源码与编写说明</h2>
+<p>本附录根据快照 <code>d9e02cb</code> 的大纲、学习指南、记忆与评测研究材料重新组织。C2/C3 标定、值班任务与能力证据为新教学例子，不是笔记作者的实作经历；经验性上下文比例不作为统一科学阈值引用。</p><ul class="source-list"><li><a href="../00-%E5%A4%A7%E7%BA%B2/Agent%E6%95%99%E5%AD%A6%E5%A4%A7%E7%BA%B2.md">00-大纲/Agent教学大纲.md</a></li><li><a href="../99-My%20idea/AI%20Agent%20%E5%AD%A6%E4%B9%A0%E6%8C%87%E5%8D%97/00.guide.md">99-My idea/AI Agent 学习指南/00.guide.md</a></li><li><a href="../99-My%20idea/Agent%20eval/01-eval.md">99-My idea/Agent eval/01-eval.md</a></li><li><a href="../99-My%20idea/AI%20coding/full_workflow.md">99-My idea/AI coding/full_workflow.md</a></li><li><a href="../99-My%20idea/memory/">99-My idea/memory/</a></li></ul><p>保留仓库相对目录可继续查看研究入口。本文没有新增模型实验或在线评测结论。</p>
+</section>
+
+<section id="notes" class="footnotes" role="doc-endnotes"><h2>补充脚注</h2>
+<p>两条补充说明如何保持学习材料可信。</p><ol><li id="note-1"><p>为结论记录其依赖版本和最小验证，不必把大量日志复制到笔记。更新实现后重跑对应检查，无法再复现时标明失效，避免旧经验悄悄变成新规则。 <a class="note-back" href="#note-ref-1" role="doc-backlink" aria-label="返回正文脚注 1">↩ 返回正文</a></p></li><li id="note-2"><p>口述练习可以使用本章构造场景，但应明确这是模拟。真实经历只讲自己实际验证过的部分，未做的压测、设备试验或事故恢复不可补写成经验。 <a class="note-back" href="#note-ref-2" role="doc-backlink" aria-label="返回正文脚注 2">↩ 返回正文</a></p></li></ol>
+</section>
+</article><nav class="chapter-pager" aria-label="章节翻页"><a href="18.html">上一章 · DeepSeek Harness 与边缘 Agent</a><a href="20.html">实战补编 · Agentic RAG →</a></nav>
+<footer class="book-footer"><span>AI 工程师：从原理到实践</span><span>附录 · 学习地图与研究笔记</span></footer></main></div>
+<p id="notice" class="sr-only" role="status"></p></body></html>

@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>模型路由与成本选择 · AI 工程师</title><link rel="stylesheet" href="reader.css">
+<script defer src="reader.js"></script>
+</head>
+<body><a class="skip" href="#main">跳到正文</a><header class="bar"><div class="bar-inner"><a class="brand" href="index.html">← 全书目录</a><div class="reader-tools" role="group" aria-label="阅读设置"><button data-size="-2" aria-label="减小字号">A−</button><span id="font-value" aria-live="polite">20px</span><button data-size="2" aria-label="增大字号">A＋</button><button class="print" data-print>打印 / PDF</button></div></div><div class="progress" aria-hidden="true"></div></header>
+<div class="reader-layout"><aside class="chapter-toc"><span class="part-label">本章导航</span><nav aria-label="本章目录"><a href="#why">上线后的两条硬约束</a><a href="#diagram">请求闭环</a><a href="#route">模型路由</a><a href="#breaker">熔断与退避重试</a><a href="#fallback">降级链</a><a href="#billing">计费与对账</a><a href="#cache">缓存与误命中</a><a href="#guard">工具权限分层</a><a href="#deploy">灰度与蓝绿</a><a href="#trace">Trace 与治理</a><a href="#external">延伸对照</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+<p>第三篇 / 第 09 章<br>建议阅读 34 分钟<br>练习另计</p><p>本章是工程化密度最高的一章，代码均为可独立运行的小示例。</p></aside>
+<main id="main" class="reading"><article><header class="chapter-head"><span class="edition">第三篇 · 从单个 Agent 到可靠系统</span><h1>模型路由与成本选择</h1><p class="deck">库存解释、路线比较和工单审批需要不同能力与风险控制。把模型选择、重试、降级、缓存和费用放在同一条请求记录里，才能解释一次回答付出了什么。</p><p class="meta">第 09 章 · 完整章节 · 先修：第 01–03 章、基本的后端工程常识</p></header>
+<details class="mobile-toc"><summary>本章目录 · 15 个小节</summary><nav aria-label="移动版本章目录"><a href="#why">上线后的两条硬约束</a><a href="#diagram">请求闭环</a><a href="#route">模型路由</a><a href="#breaker">熔断与退避重试</a><a href="#fallback">降级链</a><a href="#billing">计费与对账</a><a href="#cache">缓存与误命中</a><a href="#guard">工具权限分层</a><a href="#deploy">灰度与蓝绿</a><a href="#trace">Trace 与治理</a><a href="#external">延伸对照</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+</details>
+
+<section id="why"><h2>上线后的两条硬约束</h2><p>早高峰值班员同时发来很多查询：有的只是解释车辆状态字段，有的要综合多个站点与运输约束。全部交给同一高成本模型会浪费预算；全部交给低成本模型又可能漏掉复杂约束。模型服务暂时不可用时，也不能让助手猜测站点库存。</p><p>这里有两类边界。资源边界包括费用、并发和等待时间，业务边界包括证据有效性、工具权限和能否产生副作用。低价但错误的搬运建议，或很快返回的过期库存，都不是有效降本。</p><p>一次请求应记录选路、每次尝试、是否降级、命中缓存及实际 usage。成本不能只记最终成功的模型；超时请求可能已经被服务执行，回退模型又产生一笔费用。权限检查和审计也不能因为主模型故障而被降级跳过。</p><p>本章的模型名采用抽象能力档位，价格和 usage 为教学输入，不引用未经核验的产品档位。代码只演示政策与计算，不连接模型或真实工单系统。</p></section>
+
+<section id="diagram"><h2>请求闭环</h2><p>用同一个 request_id 连接所有分支，避免降级或缓存命中后丢掉请求来源。图中显示各阶段会留下的证据，而不是只画一条成功箭头。</p><figure class="book-diagram" aria-label="公共自行车助手的状态与证据对照"><h3>入口与决策</h3><table><thead><tr><th scope="col">阶段</th><th scope="col">读取</th><th scope="col">记录</th></tr></thead><tbody><tr><td>认证与缓存</td><td>租户、权限、知识版本</td><td>cache hit/miss 与有效期</td></tr><tr><td>路由</td><td>任务类型与预算</td><td>模型档位、理由与策略版本</td></tr><tr><td>放行</td><td>熔断器和截止时间</td><td>允许或拒绝原因</td></tr></tbody></table><h3>执行与兜底</h3><table><thead><tr><th scope="col">执行结果</th><th scope="col">接下来做什么</th><th scope="col">账本状态</th></tr></thead><tbody><tr><td>成功</td><td>业务校验后返回</td><td>实际 usage 入账</td></tr><tr><td>暂时失败</td><td>剩余时间内退避</td><td>本次尝试费用待确认或已记录</td></tr><tr><td>重试耗尽</td><td>走允许的降级路径</td><td>降级次数和结果单独统计</td></tr><tr><td>无可用证据</td><td>说明无法确认</td><td>不能用成功率掩盖拒答</td></tr></tbody></table><figcaption>表中数据均为教学设定，用于追踪输入、状态与可核查结果。</figcaption></figure></section>
+
+<section id="route"><h2>模型路由</h2><p>先按风险和能力要求筛选可用模型，再考虑价格。解释字段可以走轻量路径，多站路线比较走推理路径；创建工单则无论使用哪个模型，都要经过确定审批。路由不应成为绕过验证的捷径。</p><div class="code-label"><span>档位和预算单位均为教学设定，不是供应商产品列表</span><button data-copy="code-route" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-route">def choose_model(task, budget):
+    if task[&quot;kind&quot;] == &quot;create_order&quot;:
+        return {&quot;path&quot;:&quot;approval_workflow&quot;, &quot;model&quot;:&quot;reasoning&quot;, &quot;reason&quot;:&quot;写操作需审批&quot;}
+    if task[&quot;needs_multi_hop&quot;]:
+        if budget &lt; 2:
+            return {&quot;path&quot;:&quot;defer&quot;, &quot;model&quot;:None, &quot;reason&quot;:&quot;复杂任务预算不足&quot;}
+        return {&quot;path&quot;:&quot;answer&quot;, &quot;model&quot;:&quot;reasoning&quot;, &quot;reason&quot;:&quot;跨站约束&quot;}
+    return {&quot;path&quot;:&quot;answer&quot;, &quot;model&quot;:&quot;compact&quot;, &quot;reason&quot;:&quot;单步解释或读取&quot;}
+assert choose_model({&quot;kind&quot;:&quot;query&quot;, &quot;needs_multi_hop&quot;:True}, 1)[&quot;path&quot;] == &quot;defer&quot;</code></pre><p>复杂度由规则或分类器判断，都有漏判风险。可先为明确的业务类型固定路径，再对开放请求训练路由器。在线应抽样将低档位结果与高能力基线比较，关注难题被误分为简单题的比例。便宜模型先试再升级时，要把第一次输出和评估开销算进总成本。</p></section>
+
+<section id="breaker"><h2>熔断与退避重试</h2><p>熔断器保护故障中的下游，重试则处理可能恢复的单次失败。两者触发对象不同：权限拒绝和参数错误不应累计为供应商故障；连接超时和服务错误则可能计入。</p><h3>CLOSED</h3><table><thead><tr><th scope="col">调用前状态</th><th scope="col">允许行为</th><th scope="col">转移</th></tr></thead><tbody><tr><td>CLOSED</td><td>正常请求</td><td>达到故障阈值后 OPEN</td></tr></tbody></table><h3>OPEN</h3><table><thead><tr><th scope="col">调用前状态</th><th scope="col">允许行为</th><th scope="col">转移</th></tr></thead><tbody><tr><td>OPEN</td><td>拒绝普通请求</td><td>冷却结束后准许受限探测</td></tr></tbody></table><h3>HALF_OPEN</h3><table><thead><tr><th scope="col">调用前状态</th><th scope="col">允许行为</th><th scope="col">转移</th></tr></thead><tbody><tr><td>HALF_OPEN</td><td>只放一个或少量探测</td><td>成功恢复，失败重新冷却</td></tr></tbody></table><div class="code-label"><span>单线程三态示意，省略 CLOSED 故障累计；并发生产实现需原子预留探测位</span><button data-copy="code-breaker" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-breaker">class ProbeGate:
+    def __init__(self):
+        self.state, self.busy = &quot;CLOSED&quot;, False
+        self.until = 0
+    def allow(self, now):
+        if self.state == &quot;OPEN&quot;:
+            if now &lt; self.until:
+                return False
+            self.state = &quot;HALF_OPEN&quot;
+        if self.state == &quot;HALF_OPEN&quot;:
+            if self.busy:
+                return False
+            self.busy = True
+        return True
+    def finish(self, ok, now):
+        was_probe = self.state == &quot;HALF_OPEN&quot;
+        if was_probe:
+            self.busy = False
+        if ok:
+            self.state = &quot;CLOSED&quot;
+        else:
+            self.state, self.until = &quot;OPEN&quot;, now + 10</code></pre><p>在改变状态前保存 was_probe，可避免失败后状态已变 OPEN，清理分支再也进不去的问题。原仓库熔断示例值得重点核对这种状态变更与计数释放的先后。取消和异常也必须释放探测位，否则半开可能永久卡住。</p><p>退避可以采用 full jitter：在 <code>0</code> 到 <code>min(cap, base*2^attempt)</code> 间随机等待。供应商有 Retry-After 时还应按其规则处理。随机抖动用于分散大量客户端的重试时间，不是为了提高单次模型质量。</p><p>每次重试前检查总截止时间和剩余金额。读取可以重试，创建工单超时则不能假定没有执行；应按幂等键查询回执或重试同一业务操作。只靠“超时后换模型”可能重复创建任务。</p></section>
+
+<section id="fallback"><h2>降级链</h2><p>降级的目标是保留能保证的功能，不是强行生成一段回答。库存服务不可用时可以解释字段或展示带时间的旧快照，但不能声称完成了本次实时查询。跨站路线缺乏完整证据时，可以返回尚缺哪些信息。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-fallback" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-fallback">def unavailable_answer(task, cached_snapshot=None):
+    if task == &quot;explain_status&quot;:
+        return {&quot;status&quot;:&quot;degraded&quot;, &quot;mode&quot;:&quot;static_help&quot;, &quot;text&quot;:&quot;请参照状态字段说明。&quot;}
+    if cached_snapshot is not None:
+        return {&quot;status&quot;:&quot;degraded&quot;, &quot;mode&quot;:&quot;stale_snapshot&quot;,
+                &quot;snapshot&quot;:cached_snapshot, &quot;may_dispatch&quot;:False}
+    return {&quot;status&quot;:&quot;unavailable&quot;, &quot;mode&quot;:&quot;no_evidence&quot;, &quot;may_dispatch&quot;:False}
+assert not unavailable_answer(&quot;live_stock&quot;)[&quot;may_dispatch&quot;]</code></pre><p>备用模型应该满足相同的数据权限和输出约束，且尽量不共享同一故障域。所谓更小模型未必更可用，也不保证更快；链的顺序应由能力、独立性和预算决定。<sup><a class="note-ref" id="note-ref-2" href="#note-2" role="doc-noteref" aria-label="脚注 2：降级要有产品预案">[2]</a></sup> 把业务成功、降级展示与服务不可用分开统计，避免模板返回掩盖真实完成率。</p></section>
+
+<section id="billing"><h2>计费与对账</h2><p>按次记录账本，再汇总到整项调度任务。至少保存模型版本、输入与输出 token、缓存计费口径、价格版本、重试编号和 usage 是否最终确认。估算用于预算预留，结算以服务返回或账单为准。</p><div class="code-label"><span>美元单价为教学值；不代表任何供应商当前价格</span><button data-copy="code-reconcile" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-reconcile">from decimal import Decimal
+def estimate_cost(input_tokens, output_tokens, in_rate, out_rate):
+    million = Decimal(1_000_000)
+    return (Decimal(input_tokens)*in_rate + Decimal(output_tokens)*out_rate) / million
+cost = estimate_cost(1200, 300, Decimal(&quot;0.50&quot;), Decimal(&quot;2.00&quot;))
+assert cost == Decimal(&quot;0.0012&quot;)
+def discrepancy(estimated, actual):
+    return {&quot;delta&quot;:actual-estimated,
+            &quot;relative&quot;:None if estimated == 0 else abs(actual-estimated)/estimated}</code></pre><p>输入 1200、输出 300，在教学费率下分别花 0.0006 与 0.0006 美元，总计 0.0012。若两次尝试都计费，应累计两笔，而非仅保存最终答案那笔。<sup><a class="note-ref" id="note-ref-1" href="#note-1" role="doc-noteref" aria-label="脚注 1：估算与账单口径">[1]</a></sup> 使用 Decimal 可以减少金额计算的二进制浮点误差，但仍应按账单规定舍入。</p><p>本地估算为零而实际有费用时，相对误差没有普通定义，应单独标记，不能用随意替换分母掩盖异常。长期偏差要检查 tokenizer、工具参数、缓存 token 和额外计费项，不要靠不断提高告警阈值让告警消失。</p></section>
+
+<section id="cache"><h2>缓存与误命中</h2><p>精确缓存也需要完整键。相同问题字符串在不同租户、不同权限或不同规程版本下，答案可以不同。只对 prompt 求哈希不是零风险设计。缓存写入之前还要确认答案经过相应验证，防止失败文本长期复用。</p><div class="code-label"><span>缓存准入片段：semantic_score 由检索器提供，并非答案等价概率</span><button data-copy="code-semantic" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-semantic">def cache_match(entry, request, now, semantic_score, threshold=0.9):
+    if entry[&quot;tenant&quot;] != request[&quot;tenant&quot;]:
+        return False
+    if entry[&quot;permission_scope&quot;] != request[&quot;permission_scope&quot;]:
+        return False
+    if entry[&quot;knowledge_version&quot;] != request[&quot;knowledge_version&quot;] or now &gt;= entry[&quot;expires&quot;]:
+        return False
+    if entry[&quot;intent&quot;] != request[&quot;intent&quot;] or entry[&quot;entities&quot;] != request[&quot;entities&quot;]:
+        return False
+    return semantic_score &gt;= threshold and entry[&quot;verified&quot;]</code></pre><p>“停运 BIKE-031”和“恢复 BIKE-031”在词汇和向量上很接近，动作却相反。语义缓存应先核对意图、实体和否定方向。实时库存通常不适合长时间缓存；即便精确命中，读取快照的 TTL 也不能保证可直接据此执行搬运。</p><p>L1 进程缓存与 L2 共享缓存要协调过期和失效。规程更新后，若只清 L2，旧 L1 仍可能返回过时处置。可以在键中包含不可变知识版本，统一切换版本；同时用并发合并或锁减少同一未命中请求对下游的瞬时冲击。</p></section>
+
+<section id="guard"><h2>工具权限分层</h2><p>工具治理要在实际执行入口检查。模型使用高能力档位不应因此拥有更高权限。只读查询、建议生成、工单创建与车辆状态修改可以分成不同能力集，并对敏感写入要求审批。</p><div class="code-label"><span>授权片段：完整实现还需校验参数 Schema、审批人、期限与重放次数</span><button data-copy="code-guard" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-guard">def authorize_call(actor, tool, args, approval=None):
+    allowed = {&quot;viewer&quot;:{&quot;read_station&quot;}, &quot;dispatcher&quot;:{&quot;read_station&quot;,&quot;create_order&quot;}}
+    if tool not in allowed.get(actor[&quot;role&quot;], set()):
+        raise PermissionError(&quot;tool_forbidden&quot;)
+    if args[&quot;tenant&quot;] != actor[&quot;tenant&quot;]:
+        raise PermissionError(&quot;tenant_mismatch&quot;)
+    if tool == &quot;create_order&quot;:
+        if approval is None or approval[&quot;payload_hash&quot;] != actor[&quot;payload_hash&quot;]:
+            raise PermissionError(&quot;approval_required&quot;)
+    return True</code></pre><p>Schema 检查形状，业务规则检查数量与站点范围，审批检查具体动作是否被同意。审批绑定请求摘要后，模型若把搬运量从 5 改成 8，应重新审批。审计既记录准许也记录拒绝，敏感参数可脱敏或引用安全存储，不宜把全部凭证和维修记录写进日志。</p></section>
+
+<section id="deploy"><h2>灰度与蓝绿</h2><p>发布的不只是模型，还包括提示词、工具 Schema、路由策略和知识索引。它们最好形成一个可回滚的配置版本。金丝雀先让一部分稳定分组接受新版本，蓝绿则维护两套环境再切换入口。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-canary" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-canary">import hashlib
+def version_for(team_id, percent, salt=&quot;bike-route-v2&quot;):
+    if not 0 &lt;= percent &lt;= 100:
+        raise ValueError(&quot;灰度比例不合法&quot;)
+    digest = hashlib.sha256(f&quot;{salt}:{team_id}&quot;.encode()).digest()
+    bucket = int.from_bytes(digest[:8], &quot;big&quot;) % 100
+    return &quot;candidate&quot; if bucket &lt; percent else &quot;stable&quot;
+assert version_for(&quot;day-team&quot;, 0) == &quot;stable&quot;
+assert version_for(&quot;day-team&quot;, 100) == &quot;candidate&quot;</code></pre><p>按团队而不是单次请求分组，可以减少同一班次规则来回变化；但分组单位也会影响统计独立性。固定哈希不是随机实验效果的保证，需要检查两组任务分布。放量门槛应包含关键错误、降级率和费用，而不只看 HTTP 成功率。回滚还要确认旧版本能读取当前状态，不能只切回旧进程。</p></section>
+
+<section id="trace"><h2>Trace 与治理</h2><p>一条 trace 应把缓存、选路、熔断、模型尝试、工具调用、证据检索、验证和账本连成父子关系。对值班员看到的一个答案，能够追到所有重试及最终采用的快照，才有排障价值。</p><p>生成后治理可以先检查引用和证据版本，但引用字符串存在不代表事实被支持，自报置信度也未必校准。下面将关键断言检查结果作为输入，区分格式完备与内容通过。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-during" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-during">def generation_gate(answer, valid_sources, claim_checks):
+    if not valid_sources:
+        return {&quot;ok&quot;:False, &quot;reason&quot;:&quot;no_valid_evidence&quot;}
+    if not any(f&quot;[{sid}]&quot; in answer for sid in valid_sources):
+        return {&quot;ok&quot;:False, &quot;reason&quot;:&quot;citation_missing&quot;}
+    if not claim_checks or not all(claim_checks):
+        return {&quot;ok&quot;:False, &quot;reason&quot;:&quot;claim_not_supported&quot;}
+    return {&quot;ok&quot;:True, &quot;reason&quot;:&quot;accepted&quot;}
+assert not generation_gate(&quot;可直接投放 [B4]&quot;, [&quot;B4&quot;], [False])[&quot;ok&quot;]</code></pre><p>事前从可信语料准备证据，事中验证引用与断言，事后按用户纠错和人工抽查更新回归集。三层相互补充，不能因事后有反馈按钮就放松写工具审批。运行日志应采用最小必要信息，trace 平台也属于数据访问边界。</p></section>
+
+<section id="external"><h2>延伸对照：成本与可靠性的成熟经验</h2><p>可靠性模式来自分布式系统，模型路由与语义缓存又带来新的质量判断。迁移通用模式时，要把非确定输出和调用费用放进原有设计。</p><h3>熔断与重试</h3><p>Release It! 及相关工程实践系统化了熔断思想，AWS 的退避指南讨论指数等待与抖动。模型 API 也需要这些保护，但一次生成常比普通 RPC 更慢、更贵，重试策略应遵守任务总期限。SDK 自带重试和应用重试叠加时，还要检查最大尝试数是否相乘。</p><h3>LLM 特有的成本研究</h3><p>FrugalGPT 研究模型级联，RouteLLM 用偏好数据学习请求分配。它们的效果依赖任务分布、模型对和质量判据，不能直接套到维护工单上报节省比例。</p><p>语义缓存如 GPTCache 关注相似请求复用，但维修动作和时效约束要求更严格的等价检查。缓存率提升若伴随故障码误匹配，可能是风险扩大而非性能成功。</p><h3>可观测与治理</h3><table><thead><tr><th scope="col">能力</th><th scope="col">成熟工具或方法</th><th scope="col">应用要补的内容</th></tr></thead><tbody><tr><td>熔断重试</td><td>网关或客户端库</td><td>业务错误分类与幂等</td></tr><tr><td>路由级联</td><td>分类器和偏好路由</td><td>任务标签与质量回归</td></tr><tr><td>缓存</td><td>Redis 与向量检索</td><td>租户、版本、时效与意图</td></tr><tr><td>可观测</td><td>OpenTelemetry 与评估平台</td><td>业务完成率和费用解释</td></tr><tr><td>发布</td><td>金丝雀与蓝绿</td><td>知识、权限、状态兼容</td></tr></tbody></table><p>参考：<a href="https://arxiv.org/abs/2305.05176">FrugalGPT</a>、<a href="https://arxiv.org/abs/2406.18665">RouteLLM</a>、<a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/">OpenTelemetry GenAI</a>、<a href="https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/">AWS 退避指南</a>。</p></section>
+
+<section id="practice"><h2>动手验证</h2><p>用固定响应与虚拟时钟模拟整个请求链。不要用真实写工具测试重试，避免制造重复工单。</p><h3>练习一：跑通闭环并观察账本</h3><p>为主模型安排超时、备用模型安排成功，记录两笔尝试。给两次响应各一组 usage，用本页费用函数合计；再将备用也失败，检查结果是 unavailable 而非 answered。验证账本包含失败尝试的待对账标记，最终结果带 degraded。</p><h3>练习二：验证熔断状态迁移</h3><p>用数值时间 0、5、11 驱动 ProbeGate。失败后 open 到 10，时间 5 应拒绝，11 应进入半开，第二个并发探测应被拒绝。让半开失败，断言 busy 已释放且进入新的冷却。再测试取消路径，避免遗漏清理。</p><h3>练习三：找出语义缓存的误命中</h3><p>放入“停运 BIKE-031”的缓存，查询“恢复 BIKE-031”。即使人为传入相似度 0.99，也应因 intent 不同拒绝。再分别改变租户、权限范围、知识版本和时间，确认每种变化都能使缓存失效。</p><h3>练习四：给路由加一个复杂度判定</h3><p>先用规则区分字段解释、跨站比较和工单创建，手写至少一个每类样本以及一个歧义请求。记录误分原因，再决定是否引入分类模型。不要只按问题长度判断，短句“恢复全部车辆”也可能是高风险写操作。</p></section>
+
+<section id="recap"><h2>回顾与自测</h2><p>一次回答的真实成本包括失败尝试、降级和验证，真实成功则要求业务证据与权限均满足。路由、缓存和回退都不能改变这条验收边界。</p><details><summary>精确缓存是否天然安全？</summary><div><p>不是。键缺少租户、权限、知识版本或时效时，同样文字也会返回错误或越权结果。</p></div></details><details><summary>模型调用超时后能否立刻换模型重做写操作？</summary><div><p>不能先假定原操作没发生。使用业务幂等键和回执查询，确认状态后再恢复，审批也应绑定同一动作。</p></div></details><details><summary>为什么模板回退不算业务完成？</summary><div><p>它可能保住接口可用，却未完成实时查询或路线验证。应单列降级与不可用，不让成功率掩盖证据缺失。</p></div></details><p><a class="button" href="10.html">继续阅读：用 Harness 强制约束与验证</a></p></section>
+
+<section id="sources"><h2>源码与编写说明</h2><p>本页保留 d9e02cb 的请求可靠性目录与入口。抽象模型档位、教学费率、状态图和代码均为新编；不把示例产品名当作当前真实可用模型。未调用远程服务。</p><ul class="source-list"><li><a href="../05-model-route/README.md">05-model-route/README.md</a>。目录可用于追踪各治理模块的边界。</li><li><a href="../05-model-route/01/breaker/circuit_breaker.py">01/breaker/circuit_breaker.py</a>、<a href="../05-model-route/01/breaker/retry.py">01/breaker/retry.py</a>、<a href="../05-model-route/01/breaker/backoff.py">01/breaker/backoff.py</a>。核对状态计数、清理顺序与等待策略。</li><li><a href="../05-model-route/05/pipeline/invoke.py">05/pipeline/invoke.py</a>、<a href="../05-model-route/05/pipeline/fallback.py">05/pipeline/fallback.py</a>、<a href="../05-model-route/05/pipeline/billing.py">05/pipeline/billing.py</a>。从请求入口追踪降级和计费的关联。</li><li><a href="../05-model-route/06/billing/reconcile.py">06/billing/reconcile.py</a>、<a href="../05-model-route/07/trace/kinds.py">07/trace/kinds.py</a>、<a href="../05-model-route/08/guard/executor.py">08/guard/executor.py</a>。分别检查对账、span 类型和执行入口的治理。</li><li><a href="../05-model-route/09/deploy/canary.py">09/deploy/canary.py</a>、<a href="../05-model-route/10/cache/semantic.py">10/cache/semantic.py</a>、<a href="../05-model-route/11/governance/during.py">11/governance/during.py</a>。对照稳定分组、缓存命中和生成检查的简化实现。</li></ul><p>本页可以离线阅读与复制代码。打开源码链接时，需要让 ebook 与原仓库保持相对位置；在线资料和模型下载另需网络。</p></section>
+
+<section id="notes" class="footnotes" role="doc-endnotes"><h2>补充脚注</h2><p>这两条注释补足正文的操作边界。它们描述设计要求，不代表链接的演示程序已经具备相应保障。</p><ol><li id="note-1"><p>预留费用、API usage 和最终账单可能处于不同确认时间。给每笔尝试记录状态并在后续对账，不要把没拿到 usage 的超时当成免费。估算模型变化时保留版本，方便解释预算为何偏离。 <a class="note-back" href="#note-ref-1" role="doc-backlink" aria-label="返回正文脚注 1">↩ 返回正文</a></p></li><li id="note-2"><p>回退策略应事前规定哪些能力仍开放。只读解释可保留，缺乏实时证据的搬运执行应关闭。向用户说明结果是旧快照、静态帮助或暂不可用，并分别监控这些状态。 <a class="note-back" href="#note-ref-2" role="doc-backlink" aria-label="返回正文脚注 2">↩ 返回正文</a></p></li></ol></section>
+</article><nav class="chapter-pager" aria-label="章节翻页"><a href="08.html">上一章 · 多智能体如何协作</a><a href="10.html">下一章 · Harness：约束与验证</a></nav>
+<footer class="book-footer"><span>AI 工程师：从原理到实践</span><span>第 09 章 · 完整章节</span></footer></main></div>
+<p id="notice" class="sr-only" role="status"></p></body></html>

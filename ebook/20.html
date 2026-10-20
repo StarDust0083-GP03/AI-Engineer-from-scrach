@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>Agentic RAG：多库路由与失败出口 · AI 工程师</title><link rel="stylesheet" href="reader.css"><script defer src="reader.js"></script></head>
+<body><a class="skip" href="#main">跳到正文</a><header class="bar"><div class="bar-inner"><a class="brand" href="index.html">← 全书目录</a><div class="reader-tools" role="group" aria-label="阅读设置"><button data-size="-2" aria-label="减小字号">A−</button><span id="font-value" aria-live="polite">20px</span><button data-size="2" aria-label="增大字号">A＋</button><button class="print" data-print>打印 / PDF</button></div></div><div class="progress" aria-hidden="true"></div></header>
+<div class="reader-layout"><aside class="chapter-toc"><span class="part-label">实战补编 / 20</span><nav aria-label="本章目录"><a href="#why">把检索从固定步骤变成可选择的工具</a><a href="#diagram">一条主线，三条出口</a><a href="#trace">三幕演示：不运行也能走完整条链路</a><a href="#read">两份示例并不是同一个系统</a><a href="#boundaries">提示词约定与程序硬限制</a><a href="#practice">纸上验收：看证据，不凭回答语气</a><a href="#sources">来源与覆盖范围</a><a href="#external">与主线章节对照</a><a href="#notes">补充脚注</a></nav><p>海洋浮标观测与数据质检助手</p><p>先检查证据和状态，再判断输出是否足以交付。练习可用纸笔完成，服务调用需自行配置。</p></aside><main id="main" class="reading"><article><header class="chapter-head"><span class="edition">第六篇 · 项目实战补编</span><h1>Agentic RAG：多库路由与失败出口</h1><p class="deck">浮标助手面对招呼、跨库质检和资料库超时，怎样选择取证与退出？用新观测任务拆开 Agentic RAG 的控制过程与模拟边界。</p><p class="meta">第 20 篇阅读材料 · 海洋观测教学场景 · 数值推演与源码说明分开标注</p></header><details class="mobile-toc"><summary>本章目录 · 9 个小节</summary><nav aria-label="移动版本章目录"><a href="#why">把检索从固定步骤变成可选择的工具</a><a href="#diagram">一条主线，三条出口</a><a href="#trace">三幕演示：不运行也能走完整条链路</a><a href="#read">两份示例并不是同一个系统</a><a href="#boundaries">提示词约定与程序硬限制</a><a href="#practice">纸上验收：看证据，不凭回答语气</a><a href="#sources">来源与覆盖范围</a><a href="#external">与主线章节对照</a><a href="#notes">补充脚注</a></nav></details>
+<section id="why"><h2>把检索从固定步骤变成可选择的工具</h2>
+<p>“辛苦了”不需要检索，“B17 的温度精度和发布前质检要求是什么”则涉及两类资料。固定 RAG 若只查设备说明，会遗漏发布规则；每次都查全部库又会增加等待与无关上下文。Agentic RAG 把检索暴露为工具，让决策器依据当前问题与已有观察选择是否继续取证。</p><p><code>02-RAG/06 Agentic RAG</code> 的两份脚本展示这种控制方式，工具背后的文本与搜索打分仍是教学模拟。本章重新构造浮标问题与证据，不沿用示例库中的业务案例。源码使用的 <code>product</code>、<code>policy</code>、<code>tickets</code> 是真实标识，新场景分别把它们类比为设备说明、发布规范和故障工单。<sup><a class="note-ref" id="note-ref-1" href="#note-1">1</a></sup></p><p>离线 mock 是关键词和计数驱动的决策器，不是隐藏的智能模型；网页搜索也不代表访问了实时站点。比较模型决策与宿主执行时，先确认当前运行的是 mock 还是真实 Provider，否则会把预设路线误当模型稳定行为。</p>
+</section>
+<section id="diagram"><h2>一条主线，三条出口</h2>
+<p>一次取证任务应同时维护证据与退出原因。取了几次资料并不自动等于完成验证。</p>
+<h3>每轮决策</h3>
+<figure class="book-diagram" aria-label="逐轮证据账本"><table><thead><tr><th>模型调用前</th><th>可以选择</th><th>宿主必须保存</th></tr></thead><tbody><tr><td>只有问题</td><td>直接答或请求某库</td><td>所选工具、库与调用 ID</td></tr><tr><td>已有设备证据</td><td>补规则或结束</td><td>工具结果及来源</td></tr><tr><td>证据齐或无法继续</td><td>形成回答或说明限制</td><td>使用的依据和退出原因</td></tr></tbody></table><figcaption>图 20-1 · 状态通过工具观察累积。5 次外层模型决策的上限，不等于总共只能执行 5 个工具。</figcaption></figure>
+<h3>不是所有结束都叫成功</h3>
+<figure class="book-diagram" aria-label="三种结局的可承诺范围"><pre>无需取证 → 直接交流，不宣称检索过内部资料
+证据足够 → 有来源的回答，仍检查是否超出原文
+无法取证 / 预算耗尽 → 限制说明，列待确认项</pre><figcaption>调用自然结束与答案业务成功分开记录。超时后的礼貌回答不能冒充经过验证的结论。</figcaption></figure>
+</section>
+<section id="trace"><h2>三幕演示：不运行也能走完整条链路</h2>
+<p>下面的三幕均为纸上构造。输入、证据与计算是新教学数据，脚本原有 mock 不会自动包含这些浮标资料。</p>
+<h3>第一幕：你好</h3>
+<p>值班员输入“辛苦了”。预期路线是直接返回一句回应，不访问设备说明或工单。验收看工具计数为零，而不是看文字是否热情。若真实模型仍检索了资料，应记为路由噪声，不是声称“模型已经理解所有寒暄”。</p>
+<h3>第二幕：产品检索和退款政策分别说了什么</h3>
+<p>本幕让同一个问题需要两个库。新问题是“B17 温度字段的分辨率是多少，缺测时能否发布为正常值”。设备说明库的教学片段 D7 写“显示步进 0.01 °C，分辨率不等于测量准确度”；发布规则库的片段 Q4 写“缺测保留空值，不得作为正常实测发布”。</p><table><thead><tr><th>轮次</th><th>请求与观察</th><th>新增状态</th></tr></thead><tbody><tr><td>1</td><td>search_docs 选择 product，返回 D7</td><td>知道字段显示步进，尚无发布依据</td></tr><tr><td>2</td><td>search_docs 选择 policy，返回 Q4</td><td>补齐缺测规则，与第二个调用编号配对</td></tr><tr><td>3</td><td>不再请求工具，组织回答</td><td>报告两个结论各自的证据，不能把 0.01 °C 写成精度保证</td></tr></tbody></table><p>若第二轮没有把第一轮观察回填，决策器可能再次查设备库。若把结果放错调用 ID，协议与证据归属都会出问题。原离线版只按既定逻辑汇合文本，不具备自动断言核验，不能从“确实查了两个库”推断每一句回答都受支持。</p>
+<h3>第三幕：产品库超时</h3>
+<p>教学故障是设备说明库无法返回。原 demo 对指定库模拟等待后抛 <code>TimeoutError</code>，捕获后直接给固定限制提示并结束，不会再调用模型完成一份新分析。读者应把这个分支理解为提前退出，而非真实的备用模型服务。</p><p>在 B17 问题里，规则库即使可用也不能补造设备分辨率。合理输出可保留已知缺测政策，并明确设备参数未核实；若脚本实现直接终止，则应如实解释没有继续取证。不要给“数据库超时”填一个空列表后让下游当成“没有相关制度”，两者含义不同。</p>
+</section>
+<section id="read"><h2>两份示例并不是同一个系统</h2>
+<p>两份示例共享主题，但决策器、检索与故障路线不同，必须分别追踪。</p><table><thead><tr><th>观察点</th><th>demo</th><th>example</th></tr></thead><tbody><tr><td>决策来源</td><td>mock 或真实 OpenAI 路径</td><td>DeepSeek 工具调用</td></tr><tr><td>文本打分</td><td>查询与文本的字符集合交集</td><td>正则词段集合交集，并滤掉零分</td></tr><tr><td>工具范围</td><td>文档与模拟网页搜索</td><td>额外提供表达式计算</td></tr><tr><td>异常策略</td><td>特定超时提前返回</td><td>部分工具错误写回观察，模型调用错误另处理</td></tr><tr><td>对照输出</td><td>固定几幕流程</td><td>Naive 与 Agentic 的回答及时间</td></tr></tbody></table><p>字符重叠并非语义检索。教学输入“B17 温度”与“B18 温度”有大量共同字符，编号不一致也可能被排前；正则将连续中文当词段时，两个语义近似句也可能零交集。这些实现可演示空结果和误召回，不能当作向量数据库的质量测试。</p><p>低分是否过滤也改变行为：强行取前 k 条可能把无关文本塞给模型，过滤零分则可能频繁空结果。应分别记录命中的 ID 与分数，不只看最后能否生成一段文字。换成真实向量库还需补嵌入、索引、权限和版本管理。</p>
+<h3>计算器到底帮了什么</h3>
+<p>假设 18 台浮标各返回 24 个时槽，计划检查总数为 <code>18*24=432</code>。计算器负责算术，模型负责说明这是时槽数而不是有效观测数；若其中 12 槽缺测，有效值才是 420。两种数量必须有明确定义，不能算完就都叫数据量。</p><p>示例对白名单表达式限制字符并禁用部分执行环境，这不等于完整沙箱。超长表达式、大指数或资源消耗仍要限制。安全设计宜采用受限语法和运算预算，不能让用户任意字符串直接进入通用执行器。</p>
+</section>
+<section id="boundaries"><h2>提示词约定与程序硬限制</h2>
+<p>硬限制必须能在程序中找到计数或判断。提示里写“最多补查两次”，若代码只限制外层模型循环 5 次，就不能宣称补查次数被单独强制。一个模型回复里请求多个工具，也会让总调用数超过外层迭代数。</p><p>参数 JSON 解析位置同样重要。坏 JSON 如果在工具异常捕获范围之外，程序可能直接中止，模型不会得到可修复观察。库名、设备 ID 与 top_k 还需要验证，不应把有效 JSON 当成有效业务参数。工具结果也应区分无命中、超时和未授权。</p><p>源码的可选 LangSmith 包装用于观察调用，未配置时不影响基本循环。启用后问题与证据可能出域，应先检查是否允许记录原始设备数据。计时列表与注释数量不一致、没有金标与重复运行等因素，也意味着输出耗时不是质量结论。<sup><a class="note-ref" id="note-ref-2" href="#note-2">2</a></sup></p><p>完成验证应逐条连起问题、返回片段与答案断言。D7 只支持显示分辨率，不支持准确度或质保承诺；Q4 只处理缺测，不自动判断某次突变的物理原因。任何新增结论都需另有证据或明确标成推测。</p>
+</section>
+<section id="practice"><h2>纸上验收：看证据，不凭回答语气</h2>
+<table><thead><tr><th>新输入或事件</th><th>验收对象</th><th>不应接受的结果</th></tr></thead><tbody><tr><td>辛苦了</td><td>零工具路线</td><td>声称查阅过手册才回应</td></tr><tr><td>分辨率与缺测规则</td><td>D7 与 Q4 分别支撑对应断言</td><td>只查一库却补齐另一库结论</td></tr><tr><td>未知新传感器型号</td><td>明确资料缺失</td><td>重复查询后编参数</td></tr><tr><td>同一空结果连续出现</td><td>改写有变化且预算有上限</td><td>无条件原样重试</td></tr><tr><td>设备库超时</td><td>退出状态与限制说明</td><td>把未验证内容标为正常实测</td></tr></tbody></table><details><summary>两份工具结果都有来源，答案为何仍可能错？</summary><div><p>可能混用型号、错解单位、使用过期规范，或在生成时增加了证据中不存在的结论。来源存在只是开始，还要检查适用性与断言关系。</p></div></details><p>如需观察原 demo 的固定路线，可在仓库根目录运行 <code>python3 '02-RAG/06 Agentic RAG/code/agentic_rag_demo.py' --mock</code>。它展示的是原脚本数据，不会自动复现本章新浮标样本，本次也未执行该命令。</p>
+</section>
+<section id="sources"><h2>来源与覆盖范围</h2>
+<p>实现分歧依据同目录两份 Python 示例，Notebook、课件和图示按同一教学主题理解。本文设备片段 D7、规则 Q4 与 432 个时槽均为新构造，没有读取岸站数据库或在线测量检索质量。</p>
+</section><section id="external"><h2>与主线章节对照</h2>
+<p>需要回查召回与生成的区别时读 <a href="05.html">RAG 范式章节</a>；按目录找材料可用 <a href="coverage.html">覆盖地图</a>；全文浏览可进入 <a href="book.html">合订本</a>。本页已经给出样本所需证据，链接只用于继续追溯与比较。</p>
+</section><section id="notes" class="footnotes"><h2>补充脚注</h2>
+<ol><li id="note-1"><p>本章将新海洋场景映射到原有库标识，只为解释路由。不表示脚本自带海洋知识库；真实检索后端、数据授权和更新机制仍需另行建设。 <a class="note-back" href="#note-ref-1">返回正文 ↑</a></p></li><li id="note-2"><p>外层计时、模拟等待和纸上算术分别回答不同问题。没有相同题集、标签与重复测量，不能据此给出 Agentic RAG 优于其他方案的性能结论。 <a class="note-back" href="#note-ref-2">返回正文 ↑</a></p></li></ol>
+</section>
+<nav class="chapter-pager" aria-label="章节导航"><a href="19.html">← 上一篇</a><a href="21.html">下一篇 →</a></nav></article><footer class="book-footer"><span>AI 工程师 / 项目阅读本</span><span>阅读本 2.0 · 实战补编</span></footer></main></div><p id="notice" class="sr-only" role="status"></p></body></html>

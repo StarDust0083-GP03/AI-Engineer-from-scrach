@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>从零实现大语言模型 · AI 工程师</title><link rel="stylesheet" href="reader.css">
+<script defer src="reader.js"></script>
+</head>
+<body><a class="skip" href="#main">跳到正文</a><header class="bar"><div class="bar-inner"><a class="brand" href="index.html">← 全书目录</a><div class="reader-tools" role="group" aria-label="阅读设置"><button data-size="-2" aria-label="减小字号">A−</button><span id="font-value" aria-live="polite">20px</span><button data-size="2" aria-label="增大字号">A＋</button><button class="print" data-print>打印 / PDF</button></div></div><div class="progress" aria-hidden="true"></div></header>
+<div class="reader-layout"><aside class="chapter-toc"><span class="part-label">本章导航</span><nav aria-label="本章目录"><a href="#why">为什么要自己写一遍</a><a href="#diagram">十部分课程地图</a><a href="#transformer">核心 Transformer</a><a href="#train">训练一个微型语言模型</a><a href="#modern">现代架构改造</a><a href="#scale">规模扩展</a><a href="#moe">混合专家</a><a href="#align">从 SFT 到 RLHF</a><a href="#grpo">PPO 与 GRPO</a><a href="#external">延伸对照</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav><p>海洋浮标观测与数据质检助手</p><p>先检查证据和状态，再判断输出是否足以交付。练习可用纸笔完成，服务调用需自行配置。</p></aside>
+<main id="main" class="reading"><article><header class="chapter-head"><span class="edition">第四篇 · 理解模型，阅读真实实现</span><h1>从零实现大语言模型</h1><p class="deck">浮标日志里的一次预测如何经过注意力、损失函数和参数更新？用小矩阵与质检回答拆开模型内部，再判断哪些训练方法值得投入。</p><p class="meta">第 13 篇阅读材料 · 海洋观测教学场景 · 数值推演与源码说明分开标注</p></header>
+<details class="mobile-toc"><summary>本章目录 · 14 个小节</summary><nav aria-label="移动版本章目录"><a href="#why">为什么要自己写一遍</a><a href="#diagram">十部分课程地图</a><a href="#transformer">核心 Transformer</a><a href="#train">训练一个微型语言模型</a><a href="#modern">现代架构改造</a><a href="#scale">规模扩展</a><a href="#moe">混合专家</a><a href="#align">从 SFT 到 RLHF</a><a href="#grpo">PPO 与 GRPO</a><a href="#external">延伸对照</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+</details>
+
+<aside class="lesson-note"><p>本章把浮标数据处理作为新教学任务。涉及真实项目时以本地学习快照为界，不把纸上计算当作设备或在线服务的测试结果。</p></aside><section id="why"><h2>为什么要自己写一遍</h2>
+<p>一批浮标每十分钟上报温度、电压和质检标记。助手能解释“温度跳变为什么暂不发布”，却偶尔把缺测说成正常。排查时需要区分三种原因：观测记录没有进入上下文，生成分布偏向常见句式，或者后训练奖励过分偏爱肯定回答。三种原因分别需要检索修复、模型分析和训练数据调整，不能都归为提示词写得不够好。</p><p><code>07-llm_from_scrach/</code> 的课程把分词、前向传播、训练和对齐拆成小实现。这里用它建立计算直觉，不尝试从几条海洋记录训练出专业预报模型。教学日志可以是 <code>B17 temp=18.4 flag=suspect</code>，模型学习的是这些符号的条件分布；它并未通过这段文字接触真实传感器，更没有自动获得计量学知识。</p><p>阅读时可以沿两条证据线做记录：张量形状是否对得上，更新前后的目标是否一致。前者帮助发现转置、掩码和缓存错误，后者帮助发现模型优化了流畅度却损害质检可靠性的情况。能够逐项说明输入、参数和输出，比记住架构缩写更有用。</p>
+</section>
+
+<section id="diagram"><h2>十部分课程地图</h2>
+<p>课程中的十个部分可以按产物依赖来读。每完成一段，都有一个能够拿去检查的对象，而不是只增加一个术语。</p>
+<h3>基础</h3>
+<figure class="book-diagram" aria-label="基础部分的输入输出账本"><table><thead><tr><th>输入</th><th>变换</th><th>可检查产物</th></tr></thead><tbody><tr><td>Part 0 环境与语料</td><td>确定随机种子、设备和数据边界</td><td>能够重放的训练配置</td></tr><tr><td>Part 1 数值序列</td><td>投影、掩码、归一化</td><td>每个位置的注意力权重</td></tr><tr><td>Part 2 token 窗口</td><td>预测下一项并更新参数</td><td>留出日志上的损失曲线</td></tr></tbody></table><figcaption>从可复现输入开始，再检查计算与训练目标，避免只凭生成文本判断实现。</figcaption></figure>
+<h3>工程化</h3>
+<figure class="book-diagram" aria-label="工程部分的资源变化"><table><thead><tr><th>课程部分</th><th>改变的资源</th><th>必须维持的关系</th></tr></thead><tbody><tr><td>Part 3 现代结构</td><td>缓存和键值头数改变显存占用</td><td>缓存前后同一前缀的 logits 接近</td></tr><tr><td>Part 4 扩展训练</td><td>精度、批量与检查点</td><td>恢复时步数和优化器状态一致</td></tr><tr><td>Part 5 专家路由</td><td>部分参数参与单个 token 的计算</td><td>负载不能集中在单一专家</td></tr></tbody></table><figcaption>资源节省应附带正确性检查；速度变快也可能来自漏算了一段历史。</figcaption></figure>
+<h3>对齐</h3>
+<figure class="book-diagram" aria-label="对齐部分的信号依赖"><pre>Part 6 标注回答 → 回答位置的监督梯度
+Part 7 成对比较 → 学到相对偏好分数
+Part 8 策略采样 + 价值估计 → PPO 更新
+Part 9 同题多答 + 组内比较 → GRPO 更新</pre><figcaption>后四部分更换了学习信号。偏好分数与事实正确性之间仍有差距，需要另设验收集。</figcaption></figure>
+</section>
+
+<section id="transformer"><h2>核心 Transformer</h2>
+<p>设三条日志已经编码成三个向量，每个向量维数为 4。单头注意力先用可训练矩阵把它们投影为查询 Q、键 K、值 V。查询与键的点积形成位置间的匹配分数，softmax 再把分数转成权重。值向量承载被汇总的信息，查询与键只负责决定怎样汇总。</p><pre role="region" tabindex="0" aria-label="注意力形状与计算"><code>X.shape = (1, 3, 4)
+Q = X @ Wq; K = X @ Wk; V = X @ Wv
+S = (Q @ K.transpose(-1, -2)) / sqrt(4)
+S[i, j] = -inf  if j &gt; i
+Y = softmax(S, axis=-1) @ V</code></pre><p>这是形状说明片段，不是完整可运行模型。最后一个位置对三个可见位置的分数若为 <code>[0, ln(2), ln(5)]</code>，权重就是 <code>[1/8, 2/8, 5/8]</code>。取值向量的某一维为 <code>[8, 4, 0]</code>，该维输出为 <code>1 + 1 + 0 = 2</code>。这个数由前缀共同决定，不是从某一条日志原样复制。</p><p>因果掩码限制的是每个位置能够读取的信息。第二个位置只能看前两个 token，移去掩码后它能看到第三个 token，训练便可能偷看目标。最后一个位置没有未来位置，因此用它观察掩码差异通常看不出问题。缩放因子则在常见独立分量假设下控制点积方差，避免维数增加时 softmax 过于尖锐；它不保证所有真实激活都具有相同方差。</p><p>多头会在不同投影上重复这种汇总，拼接后再投影回模型宽度。前馈网络对各位置做非线性变换，残差提供旁路，归一化调整尺度。不能仅凭某个头的可视化就断定它专门负责电压或温度，模型内部表示通常没有这样的人工标签。</p>
+</section>
+
+<section id="train"><h2>训练一个微型语言模型</h2>
+<p>把一条教学日志编码为 <code>[11, 42, 7, 93, 5]</code>。一个长度为 4 的训练窗口以 <code>[11,42,7,93]</code> 为输入，以 <code>[42,7,93,5]</code> 为目标。目标相对输入向后错开一个位置，输入并没有被倒序。若真实下一项的预测概率是 0.25，该位置交叉熵为 <code>−ln(0.25)≈1.386</code>；概率升到 0.5，损失降为约 0.693。</p><p>训练循环需要清空梯度、前向计算、汇总有效位置损失、反向传播和优化器更新。忘记清空梯度会改变有效批量，padding 未掩码会让模型把大量填充位置当成目标。字节词表有 256 个基本值，中文通常占多个 UTF-8 字节，所以字节级模型不能笼统称为一字一个 token 的字符模型。</p><table><thead><tr><th>检查项</th><th>浮标日志里的反例</th><th>如何识别</th></tr></thead><tbody><tr><td>数据划分</td><td>同一天的相邻窗口同时进入训练和验证</td><td>按时间段或设备分组留出，防止近重复泄漏</td></tr><tr><td>损失下降</td><td>记住 B17 固定格式，却无法处理新设备</td><td>分开查看训练集与留出设备损失</td></tr><tr><td>采样</td><td>高温度生成不存在的质检标签</td><td>解析生成字段，检查是否属于允许集合</td></tr></tbody></table><p>温度、top-k 和 top-p 在推理时改变抽样分布，不会补回训练中缺失的观测。即使模型能生成格式正确的 <code>flag=good</code>，是否应发布仍需依据真实数据与规则决定。</p>
+</section>
+
+<section id="modern"><h2>现代架构改造</h2>
+<p>现代解码器常调整归一化、位置表示和前馈层。RMSNorm 不减去均值，而按均方根缩放；RoPE 对 Q、K 的成对分量做位置相关旋转，使点积体现相对位移；SwiGLU 用门控分支控制前馈特征。它们的效果依赖参数配置和训练条件，不能脱离实验把每一种替换都称为无条件提升。</p><p>推理优化可以用一条追加日志理解。已有 100 个 token，生成第 101 个时，KV cache 保存前 100 个位置的键和值，只对新位置计算新键值。新查询仍要与历史键做匹配，缓存并未消除对历史的注意力读取。训练通常并行处理完整窗口，推理则要等待上一个生成结果才能决定下一个输入。</p><table><thead><tr><th>机制</th><th>变化</th><th>边界检查</th></tr></thead><tbody><tr><td>GQA</td><td>多个查询头共享较少的键值头</td><td>检查头数可整除，缓存形状按键值头数计算</td></tr><tr><td>滑窗</td><td>新 token 只读最近一段历史</td><td>早期设备限制可能离开窗口，需要显式重注入</td></tr><tr><td>attention sink</td><td>保留开头少量位置以改善某些流式设置</td><td>它不等价于完整保存全篇语义</td></tr></tbody></table><p>课程的 <code>part_3/attn_modern.py</code> 集中展示这些组合。比较缓存开关时固定权重、前缀、精度与位置索引，先比 logits 再比速度。若位置偏移错了一位，程序仍可能生成通顺文本，但其计算已经不再等价。显存不足时也应分清权重、KV 缓存和临时激活的占用。</p>
+</section>
+
+<section id="scale"><h2>规模扩展</h2>
+<p>假设一张卡每次只能装下 2 条日志窗口，目标有效批量是 16。可以累积 8 个微批次后再更新一次参数；若每个微批次的损失已经取平均，累积时还需按 8 缩放，才能与目标梯度尺度一致。学习率调度和步数应以优化器更新次数计数，而不是每看到一个微批次就前进。</p><p>BPE 把常见符号组合合并为子词，可能缩短序列，但浮标编号和异常码仍可能被切成多个 token。混合精度减少部分张量的存储与计算开销，也会引入溢出和舍入误差；具体使用 BF16 还是 FP16 要看设备支持及数值范围。warmup 让早期更新逐渐增大，不负责修复错误标签。</p><p>检查点至少要说明保存了哪些状态：只有模型权重适合加载推理，等价续训还涉及优化器、调度器、随机状态、数据迭代位置和混合精度相关状态。恢复后可以先对比下一批的样本编号与学习率，再检查损失是否连续。TensorBoard 或 wandb 用于观察记录，不能代替这项恢复验证；外部记录服务还应避免上传原始敏感观测。</p>
+</section>
+
+<section id="moe"><h2>混合专家</h2>
+<p>MoE 把部分前馈层换为多个专家和一个路由器。以教学设定的 4 个专家、每 token 选 2 个为例，8 个 token 会产生 16 次专家分派。均衡时各专家约收 4 次；若分派数变成 <code>[12,2,1,1]</code>，单个专家会拥堵，其他参数很少参与学习。负载均衡损失、容量约束及路由策略用于处理这种偏斜，实际实现各有差异。</p><p>路由器学习的是内部表示与任务损失的关系，不能预先断定某专家就对应海温、某专家就对应波高。模型的总参数可以大于每次激活的参数，但训练或部署仍需存放全部专家，跨设备时还会增加通信。课程的 <code>gating.py</code>、<code>experts.py</code> 和 <code>moe.py</code> 可分别追踪选择、计算与合并；检查时要看门控权重如何归一化、未选专家是否确实未参与该 token 的前向。</p>
+</section>
+
+<section id="align"><h2>从 SFT 到 RLHF</h2>
+<p>预训练可能把“请解释缺测”接成另一条日志，SFT 才用任务示范塑造回答行为。教学回答规定先报数据来源，再区分已证实与待检查原因，并禁止把缺测填成实测值。训练信号来自标注样本，不会自动核验海洋事实。<sup><a class="note-ref" id="note-ref-1" href="#note-1" role="doc-noteref" aria-label="脚注 1：训练目标不等于使用目标">[1]</a></sup></p>
+<h3>SFT 监督微调</h3>
+<figure class="book-diagram" aria-label="监督位置标记"><pre>输入：B17 在 06:10 无温度值，能发布吗？
+回答：该时点缺测，保留空值并等待补报。
+监督：提示位置忽略；回答位置计算下一 token 损失。</pre><figcaption>常见的回答掩码训练只监督助手内容。忽略提示损失属于目标选择，不等于提示从上下文消失。</figcaption></figure><p>格式错误、标签分隔符不一致或 padding 未屏蔽，都会让梯度流向意外位置。监督全部文本也是一种可选目标，不能说只要训练提示位置就必然复述问题。</p>
+<h3>奖励建模</h3>
+<p>同一问题给两个候选：A 明说缺测，B 编一个温度。偏好标注选择 A，奖励模型学习让 <code>r(A)&gt;r(B)</code>。Bradley–Terry 形式的成对损失可写作 <code>−log σ(r(A)−r(B))</code>。它约束分数差，不要求每个分数是已经校准的正确率；把 0.9 当成九成可信会误用这个模型。</p>
+<h3>RL 优化</h3>
+<p>强化学习从当前策略采样回答，再按奖励更新生成概率。若奖励只检查“是否输出完整字段”，模型可能补造缺失字段以拿高分。因此应同时有不补造观测、引用有效、格式可解析等检查，并留一组独立质检题。KL 约束限制偏离参考策略，但参考策略本身的错误不会因此消失。</p>
+</section>
+
+<section id="grpo"><h2>PPO 与 GRPO</h2>
+<p>PPO 使用旧策略采样的轨迹，计算新旧策略概率比，并裁剪过大的更新激励。语言模型的 RLHF 常结合价值估计、参考策略 KL 和最终回答奖励。价值头预测未来回报以构造优势，不负责独立判断浮标记录真假。裁剪阈值也不是对每个参数变化的硬限制。</p><p>GRPO 取消独立价值估计，利用同一题的一组回答构造相对优势。设四个候选奖励为 <code>[0,2,2,4]</code>，组均值为 2，中心化奖励为 <code>[−2,0,0,2]</code>。常见标准化形式还会除以组内标准差与小常数之和，具体课程实现应查 <code>grpo_loss.py</code>。全组同分时几乎没有组内区分信号，重复采样也不一定提供有效梯度。</p><div class="code-label"><span>教学计算，不调用训练框架</span><button data-copy="code-grpo" aria-label="复制组内奖励计算">复制</button></div><pre role="region" tabindex="0" aria-label="组内奖励计算"><code id="code-grpo">rewards = [0.0, 2.0, 2.0, 4.0]
+mean = sum(rewards) / len(rewards)
+centered = [r - mean for r in rewards]
+assert centered == [-2.0, 0.0, 0.0, 2.0]
+# 这只计算中心化信号，不代表完整 GRPO 损失。
+print(centered)</code></pre><p>DeepSeekMath 提出的 GRPO 可减少价值模型相关开销，代价仍包括每题多样本生成、参考策略计算及奖励获取。若奖励偏爱长答案，策略可能学会把同一个质检结论写得很长。检查奖励与篇幅的相关性、在独立题集核对事实，比只看平均奖励上升更有说服力。<sup><a class="note-ref" id="note-ref-2" href="#note-2" role="doc-noteref" aria-label="脚注 2：对齐可能带来能力回退">[2]</a></sup></p><p>Agent 在一次任务中根据批评重查数据，改变的是当前上下文；这里的优化改变模型参数，影响后续所有相关输入。两条改进路径需要不同回滚方式，前者可重开任务，后者通常要保留旧权重和训练配置。</p>
+</section>
+
+<section id="external"><h2>延伸对照：这条技术路线的原始文献</h2>
+<p>查原始文献时，优先找本节计算对象的定义，再核对教学实现删掉了哪些部分。论文结论的实验规模和这里的小矩阵不同，不能把它们混作同一组结果。</p>
+<h3>架构</h3>
+<p><a href="https://arxiv.org/abs/1706.03762">Attention Is All You Need</a> 给出 Transformer 的注意力与层结构；阅读解码器时需留意因果掩码。RMSNorm（arXiv:1910.07467）、<a href="https://arxiv.org/abs/2104.09864">RoFormer</a> 和 GLU Variants（arXiv:2002.05202）分别改变尺度处理、位置关系与前馈激活。<a href="https://arxiv.org/abs/2305.13245">GQA</a> 的共享键值头属于存储与建模折中，<a href="https://arxiv.org/abs/2205.14135">FlashAttention</a> 则通过访存组织减少注意力实现的代价，并没有把普通精确注意力的运算关系变成滑窗。</p><p>Mixtral of Experts（arXiv:2401.04088）可用于对照专家数量与激活参数的报告方式。读数字时分别记录总参数、单 token 激活参数、硬件和吞吐口径，避免把不同口径拼成一个速度结论。</p>
+<h3>训练与对齐</h3>
+<p>Chinchilla（arXiv:2203.15556）讨论给定训练计算量时参数与数据的配比；LoRA（arXiv:2106.09685）限制可训练更新的形式。两者没有替你决定浮标数据的授权和标签质量。<a href="https://arxiv.org/abs/2203.02155">InstructGPT</a> 展示偏好后训练链路，PPO（arXiv:1707.06347）提供策略优化基础，<a href="https://arxiv.org/abs/2402.03300">DeepSeekMath</a> 可核对 GRPO 的优势与目标定义。</p><table><thead><tr><th>阅读目标</th><th>优先核对</th></tr></thead><tbody><tr><td>减少显存</td><td>是减少可训练状态、键值缓存，还是减少激活专家</td></tr><tr><td>提高可信度</td><td>奖励来源、独立测试集、事实错误分类</td></tr><tr><td>重现训练</td><td>分词器、数据划分、超参数、检查点与随机性</td></tr></tbody></table>
+<h3>对 Agent 工程师意味着什么</h3>
+<p>部署质检助手时可以据此作三项选择：记录太长先考虑证据筛选，稳定输出格式可尝试监督微调，明确且可验证的任务奖励才适合讨论强化学习。模型输出更肯定并不表示传感器数据更充分，任何训练路线都应保留缺测、拒答和人工复核的测试题。</p>
+</section>
+
+<section id="practice"><h2>动手验证</h2>
+<p>以下练习先给验收标准，再由读者决定手算或运行课程。没有要求访问真实浮标、训练大模型或上传日志。</p>
+<h3>练习一：手算一次注意力</h3>
+<p>用本章 <code>[0,ln(2),ln(5)]</code> 的分数重算权重，把第三个值从 0 改成 8，输出应从 2 变成 7。再查看 <code>part_1/attn_numpy_demo.py</code> 的第二个位置，比较掩码开关。记录哪些位置的可见集合变化，不能只看最后一个位置。</p>
+<h3>练习二：观察采样参数</h3>
+<p>固定一组 logits <code>[0,1,2]</code>，分别用温度 0.5 与 2 计算 softmax；较低温度下最大值占比应更高。在 <code>part_2/sample.py</code> 做同样对照时固定前缀与种子，记录非法质检标记的次数，不用一两条生成结果证明整体质量。</p>
+<h3>练习三：对比有/无 KV cache</h3>
+<p>为 <code>part_3/demo_generate.py</code> 准备相同输入，先验证缓存前后的下一步 logits，再计预热后的耗时。分别报告前缀处理与逐 token 解码，不把首次加载时间混入缓存收益。没有相应设备时，只计算缓存形状与字节数即可。</p>
+<h3>练习四：读懂 GRPO 的一步更新</h3>
+<p>查 <code>part_9/GRPO_TRAINING_EXPLANATION.md</code> 与损失实现，圈出均值、标准差、概率比和 KL 的位置。用 <code>[3,3,3,3]</code> 替换本章奖励，解释为何缺少相对偏好；再说明“整组都错”为什么也可能无法从相对奖励中被识别。</p>
+</section>
+
+<section id="recap"><h2>回顾与自测</h2>
+<p>对一条浮标日志，模型先把 token 转成表示，再按可见位置汇总信息；训练把预测误差转为参数更新；后训练另加示范或偏好信号。故障定位时应明确是哪一环的输入、计算或目标出了问题。</p><details><summary>注意力权重之和为 1，是否意味着答案可信？</summary><div><p>归一化只说明值向量按一定权重组合。输入缺失或内容错误时，权重仍可完全合法，输出却没有可靠观测依据。</p></div></details><details><summary>缓存为什么不能把长历史的代价全部消掉？</summary><div><p>它复用旧键值的计算，但新查询仍读取缓存。历史变长还会占用更多缓存空间，长序列读取也有开销。</p></div></details><details><summary>奖励模型一定是 RLHF 的必备独立服务吗？</summary><div><p>人类偏好常通过学习到的奖励模型扩大反馈规模，但有可验证答案的任务也能用规则奖励。选择取决于奖励是否可靠，不取决于流程图中是否画了打分框。</p></div></details><p>想追踪这套模型如何被组织成实际服务，可继续读 <a href="14.html">Hermes 的运行时与记忆</a>，重点观察证据怎样进入一次请求。</p>
+</section>
+
+<section id="sources"><h2>源码与编写说明</h2>
+<p>本章对应快照 <code>d9e02cb</code> 的模型课程。目录分工、算法名称和源码入口用于追溯实现，浮标日志、手算矩阵和练习任务为重新构造的教学材料。本次没有进行 GPU 训练，也没有比较在线模型性能。</p><ul class="source-list"><li><a href="../07-llm_from_scrach/README_cn.md">07-llm_from_scrach/README_cn.md</a></li><li><a href="../07-llm_from_scrach/part_1/attn_numpy_demo.py">part_1/attn_numpy_demo.py</a></li><li><a href="../07-llm_from_scrach/part_3/attn_modern.py">part_3/attn_modern.py</a></li><li><a href="../07-llm_from_scrach/part_9/GRPO_TRAINING_EXPLANATION.md">part_9/GRPO_TRAINING_EXPLANATION.md</a></li></ul><p>相对源码链接以仓库根目录为基准。独立拷贝阅读页时仍可阅读正文，若要查看实现需同时保留对应课程目录。</p>
+</section>
+
+<section id="notes" class="footnotes" role="doc-endnotes"><h2>补充脚注</h2>
+<p>两条注释补充训练目标与质检应用之间的差异，不代表课程已经实现海洋业务功能。</p><ol><li id="note-1"><p>下一 token 的统计目标不能直接代表观测正确率。语料里反复出现的错误校准值也可能被高概率预测出来；设备量程、时间戳和质检规则需要在业务证据层另查。 <a class="note-back" href="#note-ref-1" role="doc-backlink" aria-label="返回正文脚注 1">↩ 返回正文</a></p></li><li id="note-2"><p>奖励上升而独立质检集退化时，应保留旧模型、冻结数据与评分器版本，再分别检查偏好偏差和策略投机。增加 KL 只能限制某种偏离，不能替代事实验证。 <a class="note-back" href="#note-ref-2" role="doc-backlink" aria-label="返回正文脚注 2">↩ 返回正文</a></p></li></ol>
+</section>
+</article><nav class="chapter-pager" aria-label="章节翻页"><a href="12.html">上一章 · 测试与持续交付</a><a href="14.html">下一章 · Hermes 的运行时与记忆</a></nav>
+<footer class="book-footer"><span>AI 工程师：从原理到实践</span><span>第 13 章 · 完整章节</span></footer></main></div>
+<p id="notice" class="sr-only" role="status"></p></body></html>

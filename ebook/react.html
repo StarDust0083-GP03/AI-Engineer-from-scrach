@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>ReAct：让模型真正调用工具 · AI 工程师</title><link rel="stylesheet" href="reader.css">
+<script defer src="reader.js"></script>
+</head>
+<body><a class="skip" href="#main">跳到正文</a><header class="bar"><div class="bar-inner"><a class="brand" href="index.html">← 全书目录</a><div class="reader-tools" role="group" aria-label="阅读设置"><button data-size="-2" aria-label="减小字号">A−</button><span id="font-value" aria-live="polite">20px</span><button data-size="2" aria-label="增大字号">A＋</button><button class="print" data-print>打印 / PDF</button></div></div><div class="progress" aria-hidden="true"></div></header>
+<div class="reader-layout"><aside class="chapter-toc"><span class="part-label">本章导航</span><nav aria-label="本章目录"><a href="#why">先分清谁在行动</a><a href="#trace">走完一次循环</a><a href="#code">读懂核心源码</a><a href="#boundaries">边界与失效方式</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+<p>第一篇 / 第 02 章<br>建议阅读 15 分钟<br>练习另计</p><p>阅读到的小节会保存在当前浏览器，可从目录页继续。私密模式或本地文件策略可能限制保存。</p></aside>
+<main id="main" class="reading"><article><header class="chapter-head"><span class="edition">第一篇 · 建立 Agent 的基本模型</span><h1>ReAct：让模型<br>真正调用工具</h1><p class="deck">青禾站缺车、柳川站有余量，助手必须先查库存再查运输容量。ReAct 用每次执行得到的观察，决定下一次动作，而不是预写一整段答案。</p><p class="meta">第 02 章 · 完整章节 · 先修：Python 函数、字典与基本 LLM 调用</p></header>
+<details class="mobile-toc"><summary>本章目录 · 8 个小节</summary><nav aria-label="移动版本章目录"><a href="#why">先分清谁在行动</a><a href="#trace">走完一次循环</a><a href="#code">读懂核心源码</a><a href="#boundaries">边界与失效方式</a><a href="#practice">动手验证</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+</details>
+<section id="why"><h2>先分清谁在行动</h2><p>调度员提出一项具体任务：青禾站目标补到 15 辆，现有可借车数需重新读取；从柳川站补车，但不能超过运输车剩余容量。这个任务的后一步依赖前一步。若青禾站有 6 辆，缺口是 9；若运输车只剩 5 个车位，本次就只能提出搬运 5 辆的建议。还必须确认柳川站扣除保留量后确实有足够可调车辆。</p><p>ReAct 将任务表示成一连串可交互的决策。模型选下一动作，宿主运行对应工具，观察进入后续输入。这里的优势是可以在读到新状态后改变做法：若柳川站可调量为零，就停止推荐该来源站，而非继续执行已经失去前提的计划。</p><p>本章使用文本协议，<code>Action</code> 指向工具名，<code>Action Input</code> 携带输入，<code>Observation</code> 由程序填写。<code>Thought</code> 可以保留一行简短行动说明，便于阅读日志，但它不是内部计算的透明记录。<sup><a class="note-ref" id="note-ref-1" href="#note-1" role="doc-noteref" aria-label="脚注 1：可观察文本与内部推理">[1]</a></sup> 审核搬运建议时，可信证据是库存、容量和约束检查结果，不能因为某段说明听起来合理就判定调度安全。</p><p>文本协议适合观察解析过程，也更容易出错。工具名被加粗、参数跨行、最终答案提前出现，都可能改变分支。真实系统可以换用结构化请求，ReAct 的反馈循环仍然成立。协议形式与决策模式是两件事。</p></section>
+
+<section id="trace"><h2>走完一次循环</h2><p>以下轨迹来自预设数据和固定回复，展示理想控制流，不是远程模型日志。目标只生成搬运建议，不创建工单，也不锁车。</p><h3>每次行动</h3><figure class="book-diagram" aria-label="库存、运输容量和建议量的逐轮证据"><table><thead><tr><th scope="col">轮次</th><th scope="col">读取或生成</th><th scope="col">新增证据</th><th scope="col">下一步依据</th></tr></thead><tbody><tr><td>1</td><td>station_snapshot[QH-07,LC-02]</td><td>青禾可借 6；柳川可调 8</td><td>青禾缺口 15-6=9</td></tr><tr><td>2</td><td>van_capacity[VAN-3]</td><td>剩余车位 5</td><td>建议量 min(9,8,5)=5</td></tr><tr><td>3</td><td>Final Answer</td><td>建议从柳川搬 5 辆到青禾</td><td>结束，不产生调度副作用</td></tr></tbody></table><figcaption>图 02-1 · 观察依次补全缺口、来源余量与车位，第三轮仅提出建议，不创建调度工单。</figcaption></figure><p>同一问题在另一快照下可能需要另一条路径。若柳川可调量只有 2，即便运输车有 5 个空位，建议量也只能为 2。观察的意义是更新决策前提，不只是让最终文本附上一段工具输出。</p><h3>为什么结果必须写回历史？</h3><p>下一次模型请求不会自动继承上一次执行的局部变量。宿主必须把青禾库存、柳川可调量和快照标识放回输入。若只记录“库存查询成功”，数值没有进入提示词，模型无法据此计算缺口。</p><p>原项目的 <code>history</code> 是单次函数调用中的轨迹列表，每轮由 <code>build_prompt</code> 重新组装。它并未更新模型权重，也不自动保存到磁盘。为了控制长度，可以把工具结果保留为紧凑字段，但不能把单位、站点编码和采集时间删掉。离开这些上下文，数字 8 无法说明它是可借数、可调数还是车辆容量。</p></section>
+
+<section id="code"><h2>读懂核心源码</h2><p>源码入口仍是 agent/loop.py，阅读重点为解析、执行优先级和结束判据。下面重新写一个字典化控制流与离线适配器，让每个分支都能被断言覆盖；它不是仓库函数的逐字复制。</p><h3>第一步：拼提示词，再解析行动</h3><p>每轮把原始任务和历史交给模型适配器。解析器只接受一个动作，尽早拒绝同轮多个工具请求，避免执行一半以后才发现消息不合法。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-start" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-start">def parse_reply(text):
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    actions = [s.removeprefix(&quot;Action:&quot;).strip()
+               for s in lines if s.startswith(&quot;Action:&quot;)]
+    inputs = [s.removeprefix(&quot;Action Input:&quot;).strip()
+              for s in lines if s.startswith(&quot;Action Input:&quot;)]
+    if len(actions) == len(inputs) == 1:
+        return &quot;tool&quot;, (actions[0], inputs[0])
+    if not actions and text.startswith(&quot;Final Answer:&quot;):
+        return &quot;final&quot;, text.removeprefix(&quot;Final Answer:&quot;).strip()
+    return &quot;invalid&quot;, None</code></pre><p>这里允许行首空白，但不支持多行参数。程序应明确这些限制，并将非法格式作为可修正的观察反馈；不要把缺失参数默认为一个可能有副作用的值。</p><h3>第二步：先执行合法工具</h3><p>执行时按名字查白名单，并把实际返回值追加到轨迹。调用成功之后立即进入下一轮，不接受同一响应里尚未读到结果就写出的结论。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-tool" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-tool">def run_requested(payload, tools):
+    name, value = payload
+    if name not in tools:
+        return {&quot;action&quot;: name, &quot;input&quot;: value,
+                &quot;observation&quot;: &quot;ERROR unknown_tool&quot;}
+    try:
+        result = tools[name](value)
+    except (ValueError, TimeoutError) as exc:
+        result = &quot;ERROR &quot; + type(exc).__name__
+    return {&quot;action&quot;: name, &quot;input&quot;: value, &quot;observation&quot;: result}</code></pre><p>这里只捕获预期的业务输入错误和超时。编程错误应该让测试暴露，不能统一伪装成“工具暂时不可用”。读取结果之后有一次新的决策机会，修正参数是否值得重试还要受剩余预算约束。</p><h3>第三步：返回答案，或写入错误观察</h3><p>结束分支需要区分回答完成、格式失败和预算耗尽。返回最后一段文本会把这几种状态混在一起。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-end" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-end">def decide(kind, payload, history, require_evidence=True):
+    if kind == &quot;final&quot;:
+        ok = any(not str(h[&quot;observation&quot;]).startswith(&quot;ERROR&quot;) for h in history)
+        if require_evidence and not ok:
+            return None, &quot;ERROR evidence_required&quot;
+        return {&quot;status&quot;: &quot;answered&quot;, &quot;answer&quot;: payload}, None
+    return None, &quot;ERROR invalid_reply&quot;</code></pre><p>仓库原实现先判断合法工具，再判断 <code>Final Answer:</code>，最后写无效行动观察；上面为库存任务额外加了证据门槛。这个门槛仍只证明至少一次成功观察，不能证明所有约束都已验证。完整业务应检查必需工具集合和数值关系。</p><details><summary>展开本页新编的完整离线循环</summary><div><div class="code-label"><span>可组合代码：依赖本节前三段函数；model 是注入的普通 Python 可调用对象</span><button data-copy="code-full" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-full">def cycle(question, tools, model, max_steps=4):
+    history = []
+    for step in range(max_steps):
+        text = model(question, list(history))
+        kind, payload = parse_reply(text)
+        if kind == &quot;tool&quot;:
+            history.append(run_requested(payload, tools))
+            continue
+        final, error = decide(kind, payload, history)
+        if final is not None:
+            return {**final, &quot;steps&quot;: step + 1, &quot;history&quot;: history}
+        history.append({&quot;action&quot;: &quot;protocol&quot;, &quot;input&quot;: text,
+                        &quot;observation&quot;: error})
+    return {&quot;status&quot;: &quot;budget_exhausted&quot;, &quot;steps&quot;: max_steps, &quot;history&quot;: history}</code></pre></div></details><p>本页函数为测试返回整个结果对象，便于断言退出原因。真实接口适配层还需限制输入输出长度，并保证工具执行超时能够传播取消；单纯在模型外面多套一层 <code>for</code> 不会让阻塞的函数自动停止。</p></section>
+
+<section id="boundaries"><h2>边界与失效方式</h2><p>离线轨迹能检查状态转移，但不能替代网络故障和副作用测试。接入真实站点平台前，可以逐一检查以下四个断点。</p><h3>步数上限不等于超时</h3><p>四轮预算包含最终作答。如果前三轮都在读数据，只有一轮生成答案；第四轮又请求工具，就没有剩余轮次确认结果。与轮次分别设置的还有模型调用超时、工具超时和整个任务截止时间。<sup><a class="note-ref" id="note-ref-2" href="#note-2" role="doc-noteref" aria-label="脚注 2：多维预算">[2]</a></sup> 被卡住的第二轮不会因为设置四轮上限而自行结束。</p><p>需要传递剩余时间而非每轮重新给完整超时。否则三个依赖各等 20 秒，任务可能耗费一分钟，远超入口设定的等待预期。</p><h3>错误字符串不等于异常处理</h3><p><code>ERROR unknown_tool</code> 是协议内的反馈值，Python 的 <code>ConnectionError</code> 则是异常。只有明确捕获并转换的异常才能进入下一轮。源码里的某个工具自行处理错误，不代表主循环替所有工具实现了相同机制。</p><p>错误码最好区分可重试和不可重试。站点不存在时反复查询没有帮助；临时限流可按截止时间退避；权限撤销应停止并交给用户处理，而非让模型寻找绕路工具。</p><h3>工具白名单不等于完整安全边界</h3><p>即使只注册 <code>calculator</code>，输入也可能触发资源耗尽。对站点工具来说，白名单限制了可调用的函数名字，却没有限制可以查询的区域，也没有防止一次读取全市敏感数据。还需控制输入长度、租户范围、返回规模和执行时间。</p><p>本章的教学工具没有写能力。若换成创建搬运工单，重复动作可能造成多张工单，重试前需要幂等标识和审批记录，不能将读取工具的恢复策略直接套用。</p><h3>能给出答案，不代表任务已被验证</h3><p>回答中有 5 辆，并不说明选择正确。它可能忽略来源站保留量，也可能把一小时前的容量当成现在可用。业务验证可以检查 <code>move &lt;= deficit</code>、<code>move &lt;= source_surplus</code> 和 <code>move &lt;= capacity</code>，并要求这些值来自允许时间范围内的快照。</p><p>单有成功工具观察也可能缺一项证据。本页 <code>decide</code> 是演示性门槛，真正上线的验证器应按任务类型检查必需字段，不能把其简化判断视为完整验收。</p></section>
+
+<section id="practice"><h2>动手验证</h2><p>先运行固定回复，观察历史内容，再考虑真实模型能否稳定遵守协议。离线成功与在线成功应分别记录。</p><h3>练习一：不联网，验证三轮轨迹</h3><p>把前面四段函数保存到任意练习文件，再接上这段代码。每个工具返回教学字符串，所有计算由预设数据说明，不访问城市服务。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-exercise" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-exercise">tools = {
+    &quot;station_snapshot&quot;: lambda value: &quot;QH-07 borrowable=6; LC-02 movable=8; fixture=s1&quot;,
+    &quot;van_capacity&quot;: lambda value: &quot;VAN-3 free=5; fixture=v1&quot;,
+}
+replies = iter([
+    &quot;Action: station_snapshot\nAction Input: QH-07,LC-02&quot;,
+    &quot;Action: van_capacity\nAction Input: VAN-3&quot;,
+    &quot;Final Answer: 建议搬运 min(15-6,8,5)=5 辆；尚未创建工单。&quot;,
+])
+observed = []
+def scripted(question, history):
+    observed.append(history)
+    return next(replies)
+result = cycle(&quot;给青禾站补车建议&quot;, tools, scripted)
+assert result[&quot;status&quot;] == &quot;answered&quot; and result[&quot;steps&quot;] == 3
+assert &quot;movable=8&quot; in observed[1][0][&quot;observation&quot;]
+assert &quot;free=5&quot; in observed[2][1][&quot;observation&quot;]
+assert len(result[&quot;history&quot;]) == 2
+limited = cycle(&quot;预算测试&quot;, {}, lambda *a: &quot;Final Answer: 已完成&quot;, max_steps=1)
+assert limited[&quot;status&quot;] == &quot;budget_exhausted&quot;</code></pre><p>将 <code>max_steps</code> 改为 2 时，前两个工具仍成功，但任务状态应为预算耗尽。再把工具名改成未登记的名称，第二轮应能看到错误观察。不要靠最后一行固定打印来宣称检查通过，应当让断言检查具体的历史和退出状态。</p><h3>练习二：在 Surface 上接入真实模型</h3><p>Surface 上可以用 PowerShell 建立虚拟环境，先运行自己的离线练习。下面不复制环境文件、不填凭证，也不会发送请求。使用虚拟环境里的解释器路径，可以避免激活脚本权限带来的额外问题。</p><div class="code-label"><span>PowerShell：bike_cycle.py 是你保存的本章练习文件</span><button data-copy="code-setup" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-setup">py -3 -m venv .venv-bike
+.\.venv-bike\Scripts\python.exe bike_cycle.py
+# 再检查仓库示例的依赖，不修改已有环境配置
+Get-Content .\01-Agent\02-Agent_react\requirements.txt</code></pre><p>若要运行原项目的真实模型入口，按其 README 安装依赖，并通过受支持的凭证方式配置服务。模型名与服务可用性应以账户实际支持列表为准。本页的 <code>cycle</code> 接口与仓库 <code>react_loop</code> 不相同，不能仅替换一个名字就当成兼容适配。</p><p>Linux 和 macOS 可用 <code>python3 -m venv .venv-bike</code> 与 <code>.venv-bike/bin/python bike_cycle.py</code> 执行相同的离线断言。远程调用和本地控制流是两组测试，本次只编写了后者。</p><h3>观察日志时，只问这三个问题</h3><p>检查请求是否指向正确站点，检查观察是否进入下一轮，检查停止状态是否与实际完成情况一致。若工具成功但最终答案缺失，应记录未完成；若答案先出现而没有所需证据，应记录证据不足。真实日志应隐藏用户身份和密钥，保留足够的站点与版本信息用于复查。</p></section>
+
+<section id="recap"><h2>回顾与自测</h2><p>ReAct 对调度任务有用的地方，是每次库存或容量读取之后可以重新决定。循环的可靠性取决于解析是否明确、执行是否受控，以及观察是否真实回流。</p><details><summary>同一条响应包含调用和最终答案，怎样处理？</summary><div><p>先消费合法调用，完成后进入下一轮。这个答案是在看到本次观察之前生成的，不应用它宣称本次查询已验证。实际行为仍取决于解析器优先级，应写测试固定下来。</p></div></details><details><summary>两次工具成功为什么还可能是失败任务？</summary><div><p>缺少最终生成轮次、未读到全部必需证据，或约束验证不通过，都应让任务保持未完成。工具成功只是局部状态。</p></div></details><details><summary>历史记录里写了已搬运，可以当作操作凭据吗？</summary><div><p>不可以。建议生成与工单创建是不同动作，只有写工具的实际返回和业务回执才能证明操作发生，本章没有创建工单。</p></div></details><p><a class="button" href="03.html">继续比较：规划、反思与搜索</a></p></section>
+
+<section id="sources"><h2>源码与编写说明</h2><p>本页以 d9e02cb 快照中的循环与解析入口作对照，另写了公共自行车任务和可组合的离线代码。这里的函数名只属于教学实现，不声称仓库已经提供同名接口。没有运行远程模型。</p><ul class="source-list"><li><a href="../01-Agent/02-Agent_react/agent/loop.py">agent/loop.py</a>。检查原循环的工具优先级、最终答案和上限分支。</li><li><a href="../01-Agent/02-Agent_react/agent/prompt.py">agent/prompt.py</a>。查看行前缀解析如何影响行动选择。</li><li><a href="../01-Agent/02-Agent_react/agent/tools/calculator.py">tools/calculator.py</a>、<a href="../01-Agent/02-Agent_react/agent/tools/word_count.py">tools/word_count.py</a>。这些工具能说明输入字符串到观察文本的转换；本页没有沿用其原题目。</li><li><a href="../01-Agent/02-Agent_react/main.py">main.py</a>、<a href="../01-Agent/02-Agent_react/agent/llm/deepseek.py">llm/deepseek.py</a>。需要接真实模型时，从入口和适配文件核对配置边界。</li><li><a href="../01-Agent/02-Agent_react/Readme.md">原项目说明</a>。可从项目说明核查依赖与启动位置。</li></ul><p>本页可以离线阅读与复制代码。打开源码链接时，需要让 ebook 与原仓库保持相对位置；在线资料和模型下载另需网络。</p></section>
+
+<section id="notes" class="footnotes" role="doc-endnotes"><h2>补充脚注</h2><p>这两条注释补足正文的操作边界。它们描述设计要求，不代表链接的演示程序已经具备相应保障。</p><ol><li id="note-1"><p>Thought 适合作为简短操作理由，例如说明下一步要读取容量。它与实际动作可能不一致，验收不能只读这一字段。保留工具输入、结果和快照编号，才能独立检查搬运建议。 <a class="note-back" href="#note-ref-1" role="doc-backlink" aria-label="返回正文脚注 1">↩ 返回正文</a></p></li><li id="note-2"><p>轮次、截止时间、并发量和金额预算分别控制不同风险。入口最好为整项任务分配预算，各轮消耗后传递余量。触发哪一项上限都要在返回状态里区分，便于判断应减少工具链、修复阻塞还是提高预算。 <a class="note-back" href="#note-ref-2" role="doc-backlink" aria-label="返回正文脚注 2">↩ 返回正文</a></p></li></ol></section>
+</article><nav class="chapter-pager" aria-label="章节翻页"><a href="01.html">上一章 · 从对话到工具调用</a><a href="03.html">下一章 · 规划、反思与搜索</a></nav>
+<footer class="book-footer"><span>AI 工程师：从原理到实践</span><span>阅读本 1.0 · 完整章节</span></footer></main></div>
+<p id="notice" class="sr-only" role="status"></p></body></html>

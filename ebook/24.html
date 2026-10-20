@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>Hermes 专题：从消息到记忆与评测 · AI 工程师</title><link rel="stylesheet" href="reader.css"><script defer src="reader.js"></script></head>
+<body><a class="skip" href="#main">跳到正文</a><header class="bar"><div class="bar-inner"><a class="brand" href="index.html">← 全书目录</a><div class="reader-tools" role="group" aria-label="阅读设置"><button data-size="-2" aria-label="减小字号">A−</button><span id="font-value" aria-live="polite">20px</span><button data-size="2" aria-label="增大字号">A＋</button><button class="print" data-print>打印 / PDF</button></div></div><div class="progress" aria-hidden="true"></div></header>
+<div class="reader-layout"><aside class="chapter-toc"><span class="part-label">实战补编 / 24</span><nav aria-label="本章目录"><a href="#why">Hermes 不是只有一个 while 循环</a><a href="#diagram">把热路径和旁路分开</a><a href="#memory">01、02、07：一轮对话里的记忆读写</a><a href="#prompts">04：17 份 Prompt 目录，归成三类就不乱了</a><a href="#env">05：工具命令到底在哪台机器执行</a><a href="#cron">06：定时任务从创建到投递</a><a href="#gateway">08：两道忙时守卫为什么都要给控制消息让路</a><a href="#eval">03：一份评测报告由两层证据组成</a><a href="#practice">09 与学习副本：不用图框架也有编排</a><a href="#sources">来源与范围</a><a href="#external">与主线章节对照</a><a href="#notes">补充脚注</a></nav><p>海洋浮标观测与数据质检助手</p><p>先检查证据和状态，再判断输出是否足以交付。练习可用纸笔完成，服务调用需自行配置。</p></aside><main id="main" class="reading"><article><header class="chapter-head"><span class="edition">第六篇 · 项目实战补编</span><h1>Hermes 专题：从消息到记忆与评测</h1><p class="deck">跟踪一条值班消息怎样读取记忆、请求工具、安排巡检并留下评测材料，用 Hermes 专题接线区分会话事实、后台工作与模型输入。</p><p class="meta">第 24 篇阅读材料 · 海洋观测教学场景 · 数值推演与源码说明分开标注</p></header><details class="mobile-toc"><summary>本章目录 · 12 个小节</summary><nav aria-label="移动版本章目录"><a href="#why">Hermes 不是只有一个 while 循环</a><a href="#diagram">把热路径和旁路分开</a><a href="#memory">01、02、07：一轮对话里的记忆读写</a><a href="#prompts">04：17 份 Prompt 目录，归成三类就不乱了</a><a href="#env">05：工具命令到底在哪台机器执行</a><a href="#cron">06：定时任务从创建到投递</a><a href="#gateway">08：两道忙时守卫为什么都要给控制消息让路</a><a href="#eval">03：一份评测报告由两层证据组成</a><a href="#practice">09 与学习副本：不用图框架也有编排</a><a href="#sources">来源与范围</a><a href="#external">与主线章节对照</a><a href="#notes">补充脚注</a></nav></details>
+<section id="why"><h2>Hermes 不是只有一个 while 循环</h2>
+<p>值班员说“从明天起把缺测单列，不并入异常数”，随后要求检查 B17 的夜间观测。助手可能更新本地记忆、查询外部 Provider、调用终端统计，再把草稿投递到值班群。每个动作发生在不同边界，不能只画一个 while 就解释全部行为。</p><p><code>08-hermes-agent/</code> 的专题目录分别放大这些接线。本章按消息生命周期重新组织教学任务，保留源码与目录事实，不使用旧偏好案例。各处 <code>hermes_src</code> 和 <code>hermes-study</code> 是只读摘录或剪枝学习副本，依赖未必完整；若 demo 要求 <code>HERMES_AGENT_ROOT</code>，需指向仓库外正确版本源码，不能把摘录直接当安装包。<sup><a class="note-ref" id="note-ref-1" href="#note-1">1</a></sup></p><p>阅读时可给所有事件标上会话 S21 与本轮 T4，同时区分调用 ID 和后台任务 ID。前者解决工具结果配对，后者解决跨时刻任务关联，不能拿同一个无类型字符串随意混用。</p>
+</section>
+<section id="diagram"><h2>把热路径和旁路分开</h2>
+<p>把用户等待的工作、后台产生的工作和离线检查分别列出，可以判断一个耗时操作究竟延迟了谁。</p>
+<h3>用户正在等待的热路径</h3>
+<figure class="book-diagram" aria-label="消息热路径的状态转换"><table><thead><tr><th>阶段</th><th>输入</th><th>输出状态</th></tr></thead><tbody><tr><td>平台规范化</td><td>发送者、频道、消息 ID</td><td>已确定会话与权限主体</td></tr><tr><td>上下文准备</td><td>历史、快照、相关记忆</td><td>本轮可见材料</td></tr><tr><td>工具循环</td><td>模型请求与工具观察</td><td>报告或明确失败</td></tr><tr><td>回复与收尾</td><td>当前结果</td><td>渠道投递、历史与允许的同步</td></tr></tbody></table><figcaption>图 24-1 · 每一步输出有不同接收者，不是所有内部日志都应进入下一次模型请求。</figcaption></figure>
+<h3>围绕主路径的工作</h3>
+<figure class="book-diagram" aria-label="旁路工作分类"><pre>回合外工作：记忆复盘、技能整理、到期任务、结果投递
+观测工作：工具与模型 span、会话标签、错误记录
+离线工作：固定轨迹评分、契约断言、失败归因
+安全控制：执行前发生，不能移到离线评分之后</pre><figcaption>移出热路径可以减少等待，但不会让这些工作天然可靠，仍需状态与失败处理。</figcaption></figure>
+</section>
+<section id="memory"><h2>01、02、07：一轮对话里的记忆读写</h2>
+<p>记忆读写要看保存对象和生命周期，不能把所有路径合成“每轮自动记住一切”。</p>
+<h3>Session、Turn、工具迭代不是同一层</h3>
+<p>S21 包含多条用户消息，T4 是一次输入与回复，其中可能读取报文、运行统计和保存草稿三次工具。工具里的中间猜测不应每一步都进入稳定事实，比如一次统计失败不能被存成“B17 没有数据”。</p><p>内置 memory 工具、外部 Provider 收尾同步和后台复盘是不同写入口。主动写入可以在工具迭代里发生，收尾同步则按回合与中断规则处理；后台整理另有触发。区分这几条路径才能解释为什么某项信息已落盘，却还未出现在当前提示里。</p>
+<h3>读取分为两条路</h3>
+<p>常驻 MEMORY.md / USER.md 及 Provider 系统块可进入系统提示快照。与当前问题相关的外部记忆则经 turn 开始预取，由 Manager 汇总后放入有边界的 memory-context 数据区，再附到本轮消息。动态检索不必改动稳定前缀，但记忆里的指令仍应当数据看待。</p><p>“缺测单列”是稳定输出约定，“本次读取 B17 的 02:00 至 04:00”是当前任务范围，二者生命周期不同。召回时保留用户范围、来源与时间；只有文本相关而身份不符时仍不得注入。</p>
+<h3>用一个偏好走一遍</h3>
+<ol><li><p>用户提出新统计口径，系统按允许路径保存“缺测不计入异常”。当前回复可以通过实时工具结果确认保存，不假定冻结前缀已刷新。</p></li><li><p>下一轮要求统计夜间情况，Manager 对启用 Provider 预取相关信息，返回带出处的口径记录。</p></li><li><p>工具分别统计缺测与异常，模型在说明中明确两者分母和集合。不能只换栏目名称却仍把缺测计入异常数。</p></li><li><p>回合结束后同步允许保存的新信息。若用户中途取消，应按实现跳过不应保存的未完成结论，同时保留必要的运行记录。</p></li></ol><p>Mem0 接线展示一种外部后端，Honcho 学习副本展示另一种组织方式。Manager 管注册、扇出、围栏和会话生命周期，Provider 管具体存取。更换后端仍需检查用户映射、超时、重复同步和删除语义，不能因接口相同就推断数据治理相同。</p>
+<h3>02 主循环为什么拦截 Todo</h3>
+<p>Todo 与当前 Agent 的可变任务状态密切相关，可能在 Agent 层直接处理，而非像普通无状态函数一样经统一分发表。这不破坏模型可见工具协议：对模型仍是有名字、参数和结果的能力，只是宿主分发位置不同。</p><p>核对主循环时应找出 Todo 的持有对象和生命周期，确认它是本轮临时提醒还是跨重启任务。模型把 Todo 写为 completed 不会自动验证统计脚本退出码，运行时仍需保存真实证据。</p>
+</section>
+<section id="prompts"><h2>04：17 份 Prompt 目录，归成三类就不乱了</h2>
+<p>17 份目录条目可以按主模型前缀、辅助调用和用户轮注入三种去向理解，而非按文件数量推断有 17 个 Agent。</p><table><thead><tr><th>去向</th><th>目录主题</th><th>在新任务中的作用</th></tr></thead><tbody><tr><td>缓存前缀</td><td>宏、组装、编码与验证指导</td><td>定义稳定身份、工具和工作约束</td></tr><tr><td>辅助调用</td><td>压缩及教学/运行时摘要、标题、Curator、MoA</td><td>压缩统计过程、为会话命名或整理经验</td></tr><tr><td>辅助调用</td><td>Goal/Judge、需求、看板、Profile、视觉</td><td>完成专门输出，不自动进入主工具循环</td></tr><tr><td>当前轮注入</td><td>后台复盘、技能回顾、/learn</td><td>在指定时点发起经验整理</td></tr></tbody></table><p>假设统计轨迹变长，摘要器读取历史并保留“缺测单列”的约束；标题生成器只产生简短会话名；/learn 则可能把重复的核对方法整理成技能。它们虽然都可调用模型，输入、权限和结果去向却不同，不能把所有 usage 算成同一轮主推理的步骤数。</p><p>本地缓存组装字符串、复用 AIAgent 实例和服务端缓存前缀是三种机制。任何一层命中都不保证另外两层命中。调试时分别记录内容版本、实例生命周期和供应商 usage；更新规范时还要保证生效路径，不能为了缓存永久沿用旧口径。</p>
+</section>
+<section id="env"><h2>05：工具命令到底在哪台机器执行</h2>
+<p>终端工具接收“运行缺测统计”时，环境后端决定读的是船载工作站还是远端目录。LocalEnvironment 通过本机进程执行，Docker、SSH、Modal、Daytona、Singularity 等有各自的资源与文件边界。相同 execute 接口不等于相同权限和路径视图。</p><p>local demo 的 echo、pwd 等命令用于认识初始化、执行与清理，不证明任意命令已在安全沙箱内。新质检任务更需要核对输入 CSV 是否只读挂载、输出目录可写、模型与脚本是否继承多余环境变量。这里只说明配置位置，不读取任何真实凭据。</p><table><thead><tr><th>后端</th><th>新任务的核对对象</th><th>常见误判</th></tr></thead><tbody><tr><td>Local</td><td>用户权限、cwd、可见文件和子进程</td><td>隔离目录就等于权限隔离</td></tr><tr><td>容器或平台环境</td><td>挂载、网络、特权与资源上限</td><td>名字叫容器就默认无法访问宿主</td></tr><tr><td>SSH</td><td>远端账号、路径映射和连接状态</td><td>本地同名文件就是执行输入</td></tr></tbody></table><p>工具返回 timeout 只说明等待结束，仍应确认统计进程和孙进程是否停止，临时文件是否留下。取消处理如果只改变 UI 状态，后台脚本可能继续写输出。完整验证需观察实际资源状态，而不是看一条“已取消”提示。</p>
+</section>
+<section id="cron"><h2>06：定时任务从创建到投递</h2>
+<p>把“每天 07:30 检查前日缺测”变成任务，至少需要时区、数据范围、执行分支、接收目标与错过触发策略。定义不完整时应澄清，不由模型自行猜值班组。</p><ol><li><p>cronjob 创建后将计划写入 <code>HERMES_HOME/cron/jobs.json</code>。持久定义与正在执行的实例分开记录。</p></li><li><p>scheduler.tick 获取相应锁，查找到期项；教学 demo 自行轮询，不依赖完整 Gateway 常驻。</p></li><li><p><code>no_agent</code> 分支直接执行脚本并收集输出，另一分支才创建 Agent。离线统计成功不能证明模型分支已运行。</p></li><li><p>结果保存到 <code>cron/output</code> 任务目录，<code>deliver=local</code> 只保存；需要远端交付时再走路由器。</p></li></ol><p>原 demo 每分钟和固定次数的安排是教学配置，实际新任务不必照搬。立即到期的调试开关改变等待行为，应单独说明；RUN_AGENT 默认关闭时尤其不能把脚本执行当完整对话测试。</p><p>Cron 在材料中跳过某些常规记忆路径，避免自动化过程污染用户画像。是否需要记录“前日统计已完成”应放任务结果而非长期人格记忆。发送重试要有批次键，不能每次 tick 都重复生成同一日报。</p>
+</section>
+<section id="gateway"><h2>08：两道忙时守卫为什么都要给控制消息让路</h2>
+<p>平台事件带发送者、频道与消息 ID，归一为 MessageEvent 后按 Session Key 找历史，并缓存对应 AIAgent。不同值班群都讨论 B17 时仍应有独立会话，设备名称不能单独承担会话身份。</p>
+<h3>一个很容易发生的死锁</h3>
+<figure class="book-diagram" aria-label="审批与忙队列等待环"><pre>运行 R9：等待请求 A6 的批准
+用户消息：批准 A6
+错误路径：Adapter 见忙 → 排队
+队列条件：等 R9 空闲再处理
+结果：R9 等批准，批准等 R9，构成等待环。</pre><figcaption>授权控制消息要通过两道忙时守卫进入控制路径，普通消息仍可排队。</figcaption></figure><p>Adapter 的 active_sessions / pending_messages 与 Runner 的 running_agents / busy handler 都要识别停止、批准、拒绝和澄清，否则第一层放行、第二层仍排队也会卡住。绕过队列只提高控制优先级，不绕过身份验证、请求 ID 和当前状态检查。</p><p>取消若已完成的请求应返回明确状态，不能作用到刚开始的新请求。消息重投递还需去重，特别是批准和外发动作，不可靠队列中的一句文本无法承担全部协议。</p>
+<h3>为什么 Cron 不能“回复当前聊天”</h3>
+<p>后台任务发生时没有必然存在的“当前聊天”。Home channel 与显式 Delivery target 提供稳定目的地，origin 则保留创建时来源。若直接使用最近收到消息的地址，另一值班组恰好发来一条消息就可能收到错误报告。</p><p>应分别保存任务归属、执行会话和投递目标，发送前校验目标仍有效。投递失败不等于分析失败，本地结果可保留待重投，但报告状态不能提前写成已送达。</p>
+</section>
+<section id="eval"><h2>03：一份评测报告由两层证据组成</h2>
+<p>Layer A 用 pytest 检查契约关系，例如工具配对、压缩边界与缓存行为。Layer B 对固定正负轨迹检查工具序列、步骤、退出原因和不变量，并给出逐题分数与 RCA。这两层回答不同问题，不能只看最后一个总分。</p><p>新教学负例可以是把 B17 参数写成 B18，最终数值仍碰巧正确。契约或规则应检出设备不符，不能因文本回答看似合理就通过。另一个负例是在用户取消后继续调用保存工具，检验终止路径是否被观测到。</p><p>demo 可尝试读取主循环导出，否则用 fixture，并生成 session-tagged 日志。此处 JSONL 评分和 RCA 属于学习层，不表示 Hermes 主项目天然带有同名评测平台。故障样例被判失败是预期信号，把负例改成全绿反而使评测失去区分力。</p><p>脚本退出码可能主要由 pytest 决定，负例评分不一定使整脚本非零。因此报告应同时列契约状态、正例结果、负例检出情况与未执行项，不能把退出码 0 解读成所有业务质量都通过。<sup><a class="note-ref" id="note-ref-2" href="#note-2">2</a></sup></p>
+</section>
+<section id="practice"><h2>09 与学习副本：不用图框架也有编排</h2>
+<p>研究快照中 Hermes 用自研模型与工具循环承载编排，说明不依赖图框架也能有会话、审批、队列和记忆。这个结论有版本范围，不应扩大成项目永远不会使用某个库。</p><p>比较术语时要比较语义：ToolNode 类似工具分发，checkpoint 类似保存执行状态，但 SessionDB 的对话持久化不自动具备任意节点精确恢复；审批可能只是进程内等待，也可能是持久中断，恢复边界需要具体检查。</p><details><summary>群里已经回复批准，为什么统计任务仍在等待？</summary><div><p>依次查 Adapter 与 Runner 队列、发送者权限、审批 ID、请求是否过期及回调是否被当前运行消费。先定位控制路径，不以模型“没有理解批准”作为默认解释。</p></div></details><details><summary>每轮召回记忆放在数据围栏里就安全吗？</summary><div><p>围栏有助于区分来源，但不能完全防止注入。仍需权限过滤、不把召回命令提升为系统指令，并在工具端执行真实限制。</p></div></details><p>可以纸上增加一次 Provider 超时、一次投递失败和一次跨组重投递，分别标出会话、任务与报告会留下什么状态。若这三种故障都只写“失败”，说明恢复信息还不够。</p>
+</section>
+<section id="sources"><h2>来源与范围</h2>
+<p>本页对应 01 至 09 专题、Prompt catalog、Memory Provider、Environment、Cron 与 Gateway 教学接线，学习副本用于定位源码关系。缺测统计口径、S21/T4 和审批 A6 均为新例子。本文未连接平台、写外部记忆或注册实际定时任务。</p>
+</section><section id="external"><h2>与主线章节对照</h2>
+<p>总体职责可回读 <a href="14.html">Hermes 运行时章节</a>，项目路径可查 <a href="coverage.html">覆盖地图</a>，连续检索可用 <a href="book.html">合订本</a>。Pi 的独立笔记放在对应章节比较，不把两个运行时的同名概念直接当相同接口。</p>
+</section><section id="notes" class="footnotes"><h2>补充脚注</h2>
+<ol><li id="note-1"><p>摘录可以证明某段代码如何组织，却不保证当前目录能直接运行。完整依赖、源码版本和环境变量须按 demo 要求准备；存在文件与完成安装是不同状态。 <a class="note-back" href="#note-ref-1">返回正文 ↑</a></p></li><li id="note-2"><p>教学负轨迹与规则检查验证评测器的一部分区分能力，不是系统可用性保证。真实业务还需独立题集与外部服务故障试验，并诚实列出没有测过的路径。 <a class="note-back" href="#note-ref-2">返回正文 ↑</a></p></li></ol>
+</section>
+<nav class="chapter-pager" aria-label="章节导航"><a href="23.html">← 上一篇</a><a href="25.html">下一篇 →</a></nav></article><footer class="book-footer"><span>AI 工程师 / 项目阅读本</span><span>阅读本 2.0 · 实战补编</span></footer></main></div><p id="notice" class="sr-only" role="status"></p></body></html>

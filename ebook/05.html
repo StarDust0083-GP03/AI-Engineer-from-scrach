@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>从检索到检索策略 · AI 工程师</title><link rel="stylesheet" href="reader.css">
+<script defer src="reader.js"></script>
+</head>
+<body><a class="skip" href="#main">跳到正文</a><header class="bar"><div class="bar-inner"><a class="brand" href="index.html">← 全书目录</a><div class="reader-tools" role="group" aria-label="阅读设置"><button data-size="-2" aria-label="减小字号">A−</button><span id="font-value" aria-live="polite">20px</span><button data-size="2" aria-label="增大字号">A＋</button><button class="print" data-print>打印 / PDF</button></div></div><div class="progress" aria-hidden="true"></div></header>
+<div class="reader-layout"><aside class="chapter-toc"><span class="part-label">本章导航</span><nav aria-label="本章目录"><a href="#why">单一向量检索的局限</a><a href="#diagram">从一路检索到多路融合</a><a href="#keyword">BM25 与混合检索</a><a href="#rrf">RRF 排名融合</a><a href="#rerank">召回与精排</a><a href="#advanced">五种进阶 RAG</a><a href="#compare">范式对比与选型</a><a href="#practice">动手验证</a><a href="#external">延伸对照</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+<p>第二篇 / 第 05 章<br>建议阅读 30 分钟<br>练习另计</p><p>前半章讲检索工程，后半章讲五种进阶范式，可按需跳读。</p></aside>
+<main id="main" class="reading"><article><header class="chapter-head"><span class="edition">第二篇 · 让 Agent 拥有知识与记忆</span><h1>从检索到检索策略</h1><p class="deck">同一维修库里既有口语描述，也有必须精确匹配的部件码。用召回、融合、精排和条件路由分别处理这些差异，才能解释一段证据为什么出现在答案里。</p><p class="meta">第 05 章 · 完整章节 · 先修：第 04 章 RAG 链路</p></header>
+<details class="mobile-toc"><summary>本章目录 · 11 个小节</summary><nav aria-label="移动版本章目录"><a href="#why">单一向量检索的局限</a><a href="#diagram">从一路检索到多路融合</a><a href="#keyword">BM25 与混合检索</a><a href="#rrf">RRF 排名融合</a><a href="#rerank">召回与精排</a><a href="#advanced">五种进阶 RAG</a><a href="#compare">范式对比与选型</a><a href="#practice">动手验证</a><a href="#external">延伸对照</a><a href="#recap">回顾与自测</a><a href="#sources">源码与编写说明</a><a href="#notes">补充脚注</a></nav>
+</details>
+
+<aside class="lesson-note"><p>进一步的完整项目见 <a href="20.html">多库检索实战</a>，检索数值推演可在 <a href="25.html#rag">手算材料</a>中对照。</p></aside><section id="why"><h2>单一向量检索的局限</h2><p>维修员输入“后轮转起来一顿一顿”，规程可能写成“轮毂轴承周期性卡滞”，向量检索适合连接这类语义表达。另一位维修员输入部件码 <code>BRK-27</code>，只差一个字符的 <code>BRK-72</code> 却属于另一套制动组件，近义匹配反而危险。</p><p>单一路径难以兼顾两者。关键词检索强调字面命中，语义检索强调表达接近；融合让它们共同提出候选，精排再判断候选是否真正回答问题。某条很像维修问题的宣传材料，可能比正式规程向量更近，却不应成为处置依据。</p><p>还有需要多个证据的任务：某批次零件装在哪些车辆上，这些车辆属于哪个站点，站点当前是否还有库存。一次相似度搜索未必找到完整链条。此时要保存实体关系或分解检索，并检查每一步能否继续。</p><p>本章所有部件码、文档排名和数值都为教学输入。不同检索器的分数没有通用概率含义；没有在本页运行模型或建立真实维护索引。</p></section>
+
+<section id="diagram"><h2>从一路检索到多路融合</h2><p>下面将相同的三份教学文档放在不同决策层比较。图的每一块都记录“保留了什么信息”，便于理解融合和精排的损失。</p><figure class="book-diagram" aria-label="公共自行车助手的状态与证据对照"><h3>单路向量</h3><table><thead><tr><th scope="col">文档</th><th scope="col">向量分数</th><th scope="col">保留的信息</th></tr></thead><tbody><tr><td>A：BRK-27 更换步骤</td><td>0.71</td><td>与问题的语义接近度</td></tr><tr><td>B：制动系统常见现象</td><td>0.84</td><td>高分不代表型号匹配</td></tr></tbody></table><h3>混合检索</h3><table><thead><tr><th scope="col">文档</th><th scope="col">向量归一分</th><th scope="col">关键词归一分</th><th scope="col">α=0.5</th></tr></thead><tbody><tr><td>A</td><td>0.30</td><td>1.00</td><td>0.65</td></tr><tr><td>B</td><td>1.00</td><td>0.10</td><td>0.55</td></tr></tbody></table><h3>RRF</h3><table><thead><tr><th scope="col">文档</th><th scope="col">两路名次</th><th scope="col">k=60 的融合贡献</th></tr></thead><tbody><tr><td>A</td><td>2、1</td><td>1/62 + 1/61</td></tr><tr><td>B</td><td>1、3</td><td>1/61 + 1/63</td></tr></tbody></table><h3>召回 + 精排</h3><table><thead><tr><th scope="col">阶段</th><th scope="col">候选规模</th><th scope="col">新判断</th></tr></thead><tbody><tr><td>召回</td><td>先保留几十项</td><td>避免漏掉型号与口语近义材料</td></tr><tr><td>精排</td><td>选少量证据</td><td>检查问题和文档的联合匹配</td></tr></tbody></table><figcaption>表中数据均为教学设定，用于追踪输入、状态与可核查结果。</figcaption></figure></section>
+
+<section id="keyword"><h2>BM25 与混合检索</h2><p>两路融合前，必须保证同一个文档 ID 指向相同内容。若向量分按排名排列，关键词分按原文位置排列，直接 zip 会把两份文档的分数拼到一起。</p><h3>BM25：字面命中</h3><p>BM25 使用词频、逆文档频率和文档长度归一化。罕见的部件码有较高区分度，重复很多次的通用词“自行车”通常帮助较小。中文分词还要检查故障码是否被拆坏。</p><div class="code-label"><span>依赖 jieba 与 rank_bm25；词法规则仅用于演示故障码保护</span><button data-copy="code-bm25" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-bm25">import re
+import jieba
+from rank_bm25 import BM25Okapi
+
+def tokens(text):
+    codes = re.findall(r&quot;[A-Z]+-\d+&quot;, text)
+    rest = re.sub(r&quot;[A-Z]+-\d+&quot;, &quot; &quot;, text)
+    return codes + [t.strip() for t in jieba.cut(rest) if t.strip()]
+docs = [&quot;BRK-27 制动组件更换后必须复测&quot;, &quot;轮毂轴承卡滞检查&quot;, &quot;BRK-72 组件适配范围&quot;]
+index = BM25Okapi([tokens(d) for d in docs])
+scores = index.get_scores(tokens(&quot;BRK-27 更换后怎么检查&quot;))
+ranked = sorted(range(len(docs)), key=lambda i: scores[i], reverse=True)</code></pre><p>BM25 不会自动将“转一圈卡一下”理解为“周期性卡滞”。分词词典与同义词扩展可以改善字面匹配，但扩展过宽也会引入干扰。应分别保留故障码题和口语题的召回指标，而不是只看总体平均。</p><h3>混合检索：两路分数线性融合</h3><p>分数融合需要共同的候选集合，缺失项如何赋值也必须固定。下面以字典按 ID 对齐，并让全相等分数不额外提供区分信号。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-hybrid" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-hybrid">def scale(scores):
+    if not scores:
+        return {}
+    low, high = min(scores.values()), max(scores.values())
+    if low == high:
+        return {key: 0.0 for key in scores}
+    return {key: (value - low) / (high - low) for key, value in scores.items()}
+
+def combine(vector, keyword, alpha=0.5):
+    if not 0 &lt;= alpha &lt;= 1:
+        raise ValueError(&quot;alpha 超出范围&quot;)
+    v, b = scale(vector), scale(keyword)
+    ids = v.keys() | b.keys()
+    return sorted(((key, alpha*v.get(key, 0) + (1-alpha)*b.get(key, 0))
+                   for key in ids), key=lambda pair: (-pair[1], pair[0]))</code></pre><p>Min-Max 依赖当前候选的极值，一条极端分数会改变其余所有值。两路一旦候选范围不同，归一化后的含义也会变化。全相等返回 0 或 1 都是一种约定，应写清楚而非宣称天然正确。需要更少校准依赖时，可以改用名次融合。</p></section>
+
+<section id="rrf"><h2>RRF 排名融合</h2><p>RRF 用各路排名而非原始分数。每一路出现一次的文档贡献 <code>1/(k+rank)</code>，没有出现在该路就没有贡献。k 是平滑常数，不是最终返回数量，也不一定等于召回 K。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-rrf" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-rrf">def fuse_ranks(lists, smooth=60):
+    if smooth &lt; 0:
+        raise ValueError(&quot;平滑常数不能为负&quot;)
+    total = {}
+    for ranking in lists:
+        unique = list(dict.fromkeys(ranking))
+        for position, doc in enumerate(unique, 1):
+            total[doc] = total.get(doc, 0.0) + 1 / (smooth + position)
+    return sorted(total.items(), key=lambda item: (-item[1], item[0]))
+result = fuse_ranks([[&quot;A&quot;, &quot;B&quot;, &quot;C&quot;], [&quot;C&quot;, &quot;A&quot;, &quot;D&quot;]])
+assert result[0][0] == &quot;A&quot;</code></pre><p>这组排名里 A 得 <code>1/61+1/62≈0.03252</code>，C 得 <code>1/63+1/61≈0.03227</code>，B 只有 <code>1/62≈0.01613</code>。A 与 C 分数接近，B 虽然在向量路排第二，却没有另一条路的支持。</p><p>RRF 丢弃了第一名领先第二名多少的信息。若关键词第一名是精确部件码命中、其余候选完全无关，名次仍只差一位。可以加精确过滤或为检索路设置经验证的权重，但不要把“对分数尺度不敏感”误读成“对所有错误都稳健”。同一条路重复出现相同文档时也应去重，避免重复贡献。</p></section>
+
+<section id="rerank"><h2>召回与精排</h2><p>召回阶段面向全库，精排阶段只检查少量问题与文档对。双塔可以预先编码规程，交叉编码器则在每次查询时共同读取问题与候选，因而能利用更细的交互。</p><h3>Bi-Encoder · 粗召回</h3><table><thead><tr><th scope="col">预先计算</th><th scope="col">查询时计算</th><th scope="col">需要关注</th></tr></thead><tbody><tr><td>每段规程的向量</td><td>问题向量与近邻搜索</td><td>型号字面约束可能不足</td></tr><tr><td>索引版本与元数据</td><td>候选过滤</td><td>不应混用失效版本</td></tr></tbody></table><p>召回数量应覆盖可能的证据，不能在第一阶段就只留一个高分项，否则精排没有机会修复漏召回。</p><h3>Cross-Encoder · 精排</h3><table><thead><tr><th scope="col">输入对</th><th scope="col">精排判断</th><th scope="col">输出证据</th></tr></thead><tbody><tr><td>问题 BRK-27 + 文档 A</td><td>型号与操作条件相符</td><td>保留更换复测条款</td></tr><tr><td>问题 BRK-27 + 文档 B</td><td>主题接近但缺型号条件</td><td>可能降序或剔除</td></tr></tbody></table><div class="code-label"><span>片段：scorer 可包装 CrossEncoder.predict，也可注入固定打分函数</span><button data-copy="code-rerank" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-rerank">def rerank_candidates(query, candidates, scorer, keep=3):
+    if not candidates:
+        return []
+    pairs = [(query, item[&quot;text&quot;]) for item in candidates]
+    scores = scorer(pairs)
+    if len(scores) != len(candidates):
+        raise ValueError(&quot;重排分数数量错误&quot;)
+    ordered = sorted(zip(candidates, scores), key=lambda p: p[1], reverse=True)
+    return [{**item, &quot;rerank_score&quot;: float(score)} for item, score in ordered[:keep]]</code></pre><p>Cross-Encoder 需要对每一对文本现算，不能像文档向量一样一次预计算后用于所有查询。它也有输入长度上限，候选被截断时可能丢掉关键条件。并非所有模型都输出可比较的概率，阈值需要在使用的版本上校准。</p><p>若候选高度重复，可在精排前后安排 MMR，但顺序会影响结果。下面用已算好的问题相似度与块间相似度矩阵演示标准选择过程。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-mmr" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-mmr">def select_diverse(query_scores, pair_scores, count, weight=0.7):
+    left, selected = set(range(len(query_scores))), []
+    while left and len(selected) &lt; count:
+        def value(i):
+            redundancy = max((pair_scores[i][j] for j in selected), default=0.0)
+            return weight*query_scores[i] - (1-weight)*redundancy
+        chosen = max(sorted(left), key=value)
+        selected.append(chosen)
+        left.remove(chosen)
+    return selected
+assert select_diverse([0.9,0.88,0.8], [[1,0.99,0.1],[0.99,1,0.1],[0.1,0.1,1]], 2) == [0,2]</code></pre><p>原问题不适合检索时，可以生成更清楚的查询或提炼背景问题。<sup><a class="note-ref" id="note-ref-1" href="#note-1" role="doc-noteref" aria-label="脚注 1：查询改写">[1]</a></sup> 改写应保留部件码、车型、否定条件，不能把“BRK-27 更换后复测”泛化成“制动系统介绍”，让精确条款从候选池里消失。</p></section>
+
+<section id="advanced"><h2>五种进阶 RAG</h2><p>进阶方法改变的不只是排名，还包括何时检索、如何扩大证据以及怎样判断够不够。下面围绕维护与调度任务说明五种不同决策，不把同一个流程换五个名字。</p><h3>1. GraphRAG · 把知识建成图</h3><p>图检索适合显式关系链。教学图记录零件批次、车辆和站点：批次 LOT-6 装在 BIKE-031，BIKE-031 最近登记于 QH-07。查“受影响车辆在哪个站”时，需要连接两条边，并核对登记时间。</p><div class="code-label"><span>固定关系图教学代码；真实系统还需边的来源与有效时间</span><button data-copy="code-graph" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-graph">edges = {
+    &quot;LOT-6&quot;: [(&quot;installed_on&quot;, &quot;BIKE-031&quot;)],
+    &quot;BIKE-031&quot;: [(&quot;registered_at&quot;, &quot;QH-07&quot;)],
+}
+def two_hops(seed):
+    triples = []
+    for relation, target in edges.get(seed, []):
+        triples.append((seed, relation, target))
+        triples.extend((target, r, end) for r, end in edges.get(target, []))
+    return triples
+assert (&quot;BIKE-031&quot;, &quot;registered_at&quot;, &quot;QH-07&quot;) in two_hops(&quot;LOT-6&quot;)</code></pre><p>实体抽取把型号认错或把历史站点当成当前站点，后续多跳会继续传播错误。普通 BFS 子图只是图增强检索的一种简化；Microsoft GraphRAG 的社区摘要与全局问答设计不能用两跳函数完整代表。</p><h3>2. Agentic RAG · 让 Agent 决定检索</h3><p>将规程查询包装成工具以后，模型可以因新证据继续搜索。比如先查制动故障，再根据返回条款里出现的车型编号读取专属复测要求。</p><div class="code-label"><span>工具契约片段，不使用未经说明的装饰器 API</span><button data-copy="code-agentic" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-agentic">def search_manual(query, retriever):
+    hits = retriever(query)
+    if not hits:
+        return {&quot;status&quot;: &quot;no_evidence&quot;, &quot;items&quot;: [], &quot;retry_hint&quot;: &quot;保留型号，补充故障现象&quot;}
+    return {&quot;status&quot;: &quot;found&quot;, &quot;items&quot;: hits}
+
+policy = {&quot;max_searches&quot;: 3, &quot;write_tools&quot;: False,
+          &quot;required_for&quot;: [&quot;本地维护规则&quot;, &quot;停运与复测要求&quot;]}</code></pre><p>检索次数由任务状态决定，但仍受宿主上限限制。结果不充分可以改写，也可以终止说明资料不足。<sup><a class="note-ref" id="note-ref-2" href="#note-2" role="doc-noteref" aria-label="脚注 2：阈值要按分布定">[2]</a></sup> 不能因为模型说“再试一次”就无限请求，或在空结果时转向未经授权的数据源。</p><h3>3. Self-RAG · 四步自省</h3><p>Self-RAG 关注检索与生成过程的评价：是否需要检索、证据是否相关、断言是否有支持、答案是否满足问题。论文通过训练反思标记实现这些能力，教学脚本用多次提示模拟，不应说成复现了训练。</p><div class="code-label"><span>教学代码，可离线检查；不连接业务服务</span><button data-copy="code-self" aria-label="复制教学代码">复制</button></div><pre role="region" tabindex="0" aria-label="教学代码"><code id="code-self">def inspect_answer(needs_lookup, evidence_relevant, claims_supported, complete):
+    if needs_lookup and not evidence_relevant:
+        return &quot;retrieve_again&quot;
+    if not claims_supported:
+        return &quot;revise_from_evidence&quot;
+    if not complete:
+        return &quot;answer_missing_part&quot;
+    return &quot;accept&quot;
+assert inspect_answer(True, True, False, True) == &quot;revise_from_evidence&quot;</code></pre><p>每个判断应留下理由和所指证据，二值结果才可复核。连续自评使用同源模型时可能共享误解，尤其需要确定规则拦住错误型号或无出处操作。</p><h3>4. Corrective RAG · 检索不好就纠正</h3><p>Corrective RAG 在证据不可靠时先纠正再生成。查询“刹车发软”若只召回营销说明，可以判为低质量，改写成“制动力不足 检查 停运 条款”，再检索受控规程库。补充材料仍需审核，不能因一次检索不佳就自动访问任意网站。</p><p>原始 CRAG 包含检索评价与知识精炼等设计，本地演示可能只实现改写与重试。验收时要看失败候选是否真的被排除、补充证据是否进入生成，而非仅看流程名称。</p><h3>5. Adaptive RAG · 先分类再路由</h3><p>Adaptive RAG 先判断问题复杂度。问“助手能做什么”可直接说明能力；问某型号复测步骤可单次检索；问某批次涉及哪些站点并如何安排维修，需要多跳证据。路由器把这些请求送往不同路径，简单题减少成本，复杂题保留必要检索。</p><p>误把复杂题分到直接回答的分支会损失证据。路由应保留原因，并允许后续证据检查将请求升级。若没有稳定的复杂度标签集，先用少量显式业务规则往往更容易解释。</p></section>
+
+<section id="compare"><h2>范式对比与选型</h2><p>先按失败类别选择，再测收益。图谱、动态工具与自评可以组合，但每一层都需要自己的日志和测试。</p><table><thead><tr><th scope="col">需求</th><th scope="col">适合尝试</th><th scope="col">先验证什么</th></tr></thead><tbody><tr><td>同义现象与精确部件码并存</td><td>关键词加向量融合</td><td>两类题目召回是否互补</td></tr><tr><td>候选相关但不回答具体问题</td><td>精排</td><td>正确证据是否已进入候选池</td></tr><tr><td>批次到车辆再到站点</td><td>关系检索</td><td>实体与边的时间、出处</td></tr><tr><td>信息不足时需要继续追问检索</td><td>Agentic 或 Corrective</td><td>重试是否带来新增证据</td></tr><tr><td>请求难度差异很大</td><td>Adaptive</td><td>低成本路由的漏判率</td></tr></tbody></table><p>混合检索指组合多个检索信号，既可以按分数加权，也可以用 RRF 按排名融合。两者并非完全对立的技术类别。比较时应说清采用哪种融合口径，而不是把“混合检索”限定成唯一的线性公式。</p></section>
+
+<section id="practice"><h2>动手验证</h2><p>先用固定分数和候选测试排序函数。接入模型以后，再测改写质量与延迟，避免把两个层次的错误混在一起。</p><h3>练习一：亲手算一遍 RRF</h3><p>采用本页两路排名 A,B,C 与 C,A,D。分别用 smooth 为 1、60、1000 计算 A 和 C 的值。平滑常数越大，靠前名次之间的差越小；多路都出现的优势仍存在。删除 C 在第二路的位置，观察其分数减少的不是一个固定常数，而是对应那一路的倒数贡献。</p><h3>练习二：比较混合检索的 alpha</h3><p>给 A、B 固定向量分 0.7、0.9，关键词分 8、1，用本页 combine 调 alpha 为 0、0.5、1。记录中间归一化值及最终排名，再加入一条关键词分 80 的干扰文档，观察 Min-Max 的尺度变化。不要只看最终第一名而忽略其余候选分数整体被压缩。</p><h3>练习三：给 Self-RAG 换一个判断标准</h3><p>将 Self-RAG 的相关性布尔值改为 1 至 5 分，事先规定阈值并保留边界样本。若 3 分进入再检索，4 分直接生成，要检查相邻评分是否稳定，重试率是否大幅变化。打分形式更细并不自动更可靠，必须对人工标注的相关与不相关材料测误判。</p></section>
+
+<section id="external"><h2>延伸对照：检索技术的出处与生产形态</h2><p>检索领域的名词应按其原始机制理解。把库接口名、模型类型和完整研究方法放在同一层，会导致错误选型。</p><h3>检索层</h3><p>BM25 属于概率相关度框架，RRF 是合并排名的规则。Cross-Encoder 让查询与候选充分交互，ColBERT 则是多向量的后期交互方案，不能将 ColBERT 当成所有交叉编码器的出处。HyDE 先生成假想文档再检索，Step-back 抽象问题背景，二者改写目标也不同。</p><p>这些方法都可以改善某些失败类型，但假想答案中的错误型号、背景问题里的条件丢失，也会把召回引向错误方向。保留原查询与改写查询的结果对照，才能知道新增调用是否值得。</p><h3>范式层</h3><p>Self-RAG 的反思标记、CRAG 的证据评价与纠正、Adaptive-RAG 的复杂度分类，以及 GraphRAG 的图和摘要，各有训练或预处理前提。一个教学脚本即使同名，也可能只展示其中一个路由分支。评审实现时应列明真实完成的环节，不直接套用论文效果。</p><h3>框架里的对应</h3><p>LangChain 和 LlamaIndex 提供多路检索与重排封装，搜索引擎也支持排名融合。采用这些接口前，要检查重复 ID、过滤时机、排名起点以及分数方向。过滤发生在召回之前还是之后，可能显著改变租户隔离和召回率。</p><table><thead><tr><th scope="col">工程接口</th><th scope="col">应检查的行为</th></tr></thead><tbody><tr><td>多路融合</td><td>缺失文档、重复文档与稳定排序</td></tr><tr><td>精排服务</td><td>截断、批量大小、异常回退</td></tr><tr><td>图检索</td><td>边的有效期与访问控制</td></tr><tr><td>动态检索路由</td><td>最大次数、证据充分性与停止原因</td></tr></tbody></table><h3>一个判断标准</h3><p>固定评估集应同时覆盖口语故障、精确码、跨条款条件、无答案和过期版本。只在几道模型容易回答的问题上比较，会高估复杂检索链的价值。新增一层后至少记录证据召回、最终正确率、P95 延迟和单请求成本。</p><p>原文：<a href="https://arxiv.org/abs/2004.12832">ColBERT</a>、<a href="https://arxiv.org/abs/2212.10496">HyDE</a>、<a href="https://arxiv.org/abs/2310.11511">Self-RAG</a>、<a href="https://arxiv.org/abs/2401.15884">CRAG</a>、<a href="https://arxiv.org/abs/2403.14403">Adaptive-RAG</a>、<a href="https://arxiv.org/abs/2404.16130">GraphRAG</a>。</p></section>
+
+<section id="recap"><h2>回顾与自测</h2><p>检索链可以分成提出候选、合并候选、验证顺序和决定是否继续四个动作。先定位失败发生在哪一个动作，再添加对应机制。</p><details><summary>RRF 比分数融合保留的信息更多吗？</summary><div><p>不是。它主动舍弃分数间距，只保留排名。好处是减少尺度校准，代价是难以识别某一路第一名的绝对领先。</p></div></details><details><summary>精排为什么无法补回完全漏掉的条款？</summary><div><p>精排只看到召回候选。正确条款未入池时，精排最多把错误候选重新排序，需要先修解析、过滤或召回。</p></div></details><details><summary>Self-RAG 多次自评是否等于独立验证？</summary><div><p>不等于。它可能与生成器共享偏差。硬约束、外部证据和人工校准仍然需要，不能用多轮赞同代替。</p></div></details><p><a class="button" href="06.html">继续阅读：用评测区分检索与生成失败</a></p></section>
+
+<section id="sources"><h2>源码与编写说明</h2><p>本章保留 d9e02cb 的检索脚本与进阶示例入口。所有排序输入、维修关系图与代码为新编，包含外部依赖的片段只说明接口，不声称已实测模型效果。</p><ul class="source-list"><li><a href="../02-RAG/02-RAG_basic/README.md">02-RAG_basic/README.md</a>。用于定位检索基础示例的相互关系。</li><li><a href="../02-RAG/02-RAG_basic/08-bm25_search.py">08-bm25_search.py</a>、<a href="../02-RAG/02-RAG_basic/09-hybrid_search.py">09-hybrid_search.py</a>、<a href="../02-RAG/02-RAG_basic/10-rrf_search.py">10-rrf_search.py</a>。对照词法召回、分数融合与排名融合的计算位置。</li><li><a href="../02-RAG/02-RAG_basic/11-reranking.py">11-reranking.py</a>、<a href="../02-RAG/02-RAG_basic/12-mmr_crossencoder.py">12-mmr_crossencoder.py</a>。查看两阶段候选与块间冗余如何连接。</li><li><a href="../02-RAG/03-high_level_RAG/README.md">03-high_level_RAG/README.md</a>、<a href="../02-RAG/03-high_level_RAG/01-graph_rag.py">01-graph_rag.py</a>、<a href="../02-RAG/03-high_level_RAG/02-agentic_rag.py">02-agentic_rag.py</a>、<a href="../02-RAG/03-high_level_RAG/03-self_rag.py">03-self_rag.py</a>、<a href="../02-RAG/03-high_level_RAG/04-corrective_rag.py">04-corrective_rag.py</a>、<a href="../02-RAG/03-high_level_RAG/05-adaptive_rag.py">05-adaptive_rag.py</a>。比较五种演示实际实现的分支，避免把教学近似当作原论文完整系统。</li></ul><p>本页可以离线阅读与复制代码。打开源码链接时，需要让 ebook 与原仓库保持相对位置；在线资料和模型下载另需网络。</p></section>
+
+<section id="notes" class="footnotes" role="doc-endnotes"><h2>补充脚注</h2><p>这两条注释补足正文的操作边界。它们描述设计要求，不代表链接的演示程序已经具备相应保障。</p><ol><li id="note-1"><p>改写应携带不可丢的限制，如部件码、车型和故障方向。可以把这些限制另存结构化字段，在新查询生成后核验是否仍在；如果被删改，退回原查询或要求重新生成。 <a class="note-back" href="#note-ref-1" role="doc-backlink" aria-label="返回正文脚注 1">↩ 返回正文</a></p></li><li id="note-2"><p>阈值应对当前模型和语料校准。用已标注的正确证据、主题近似干扰和完全无关材料观察分布，再选择切点。模型升级、语料扩张后重新检查，不能让旧阈值永久代表资料充分。 <a class="note-back" href="#note-ref-2" role="doc-backlink" aria-label="返回正文脚注 2">↩ 返回正文</a></p></li></ol></section>
+</article><nav class="chapter-pager" aria-label="章节翻页"><a href="04.html">上一章 · 搭建一条 RAG 链路</a><a href="06.html">下一章 · 评测 RAG 与处理 PDF</a></nav>
+<footer class="book-footer"><span>AI 工程师：从原理到实践</span><span>第 05 章 · 完整章节</span></footer></main></div>
+<p id="notice" class="sr-only" role="status"></p></body></html>
