@@ -121,6 +121,8 @@ def build_volume():
         prefix = prefixes[filename]
         body = re.sub(r'\bid="([^"]+)"', lambda m: f'id="{prefix}-{m[1]}"', body)
         body = re.sub(r'data-copy="([^"]+)"', lambda m: f'data-copy="{prefix}-{m[1]}"', body)
+        body = re.sub(r'aria-labelledby="([^"]+)"',
+                      lambda m: 'aria-labelledby="' + ' '.join(prefix + '-' + key for key in m[1].split()) + '"', body)
 
         def link(match):
             href, text = unescape(match[1]), match[2]

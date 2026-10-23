@@ -6,6 +6,7 @@ import unittest
 import json
 import re
 import subprocess
+import xml.etree.ElementTree as ET
 from functools import lru_cache
 
 ROOT = Path(__file__).resolve().parent
@@ -102,6 +103,22 @@ class BookTests(unittest.TestCase):
         self.assertIn('B17', volume, 'The volume must contain the new observation examples')
         self.assertIn('柳川', volume, 'The volume must contain the new bicycle examples')
         self.assertEqual(volume.count('<article class="volume"'), 26)
+
+    def test_inline_illustrations_and_volume_labels(self):
+        ns = '{http://www.w3.org/2000/svg}'
+        for filename, expected in [('01.html', 1), ('04.html', 1), ('07.html', 1), ('book.html', 3)]:
+            page = ROOT / filename
+            figures = re.findall(r'<figure[^>]*data-review-figure="[^"]+"[^>]*>(.*?)</figure>', page.read_text(), re.S)
+            self.assertEqual(len(figures), expected, filename)
+            for figure in figures:
+                svg = ET.fromstring(re.search(r'<svg\b.*?</svg>', figure, re.S)[0])
+                title, desc = svg.find(ns + 'title'), svg.find(ns + 'desc')
+                self.assertIsNotNone(title)
+                self.assertIsNotNone(desc)
+                self.assertTrue(title.text and desc.text)
+                self.assertEqual(svg.get('aria-labelledby').split(), [title.get('id'), desc.get('id')])
+                for key in svg.get('aria-labelledby').split():
+                    self.assertIn(key, parsed(page).ids)
 
     def test_source_coverage_is_exhaustive_without_duplicate_files(self):
         manifest = json.loads((ROOT / 'coverage.json').read_text())
